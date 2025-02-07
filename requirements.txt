@@ -1,0 +1,10 @@
+nerfview
+viser
+gsplat
+plyfile
+opencv-python
+numpy==1.24 # anything but 2.0.0
+ruff
+open-clip-torch
+open3d
+setuptools==69.1

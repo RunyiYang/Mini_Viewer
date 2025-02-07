@@ -1,0 +1,6 @@
+models/
+output_logs/
+*.pth
+*.ply
+*.error
+*.log

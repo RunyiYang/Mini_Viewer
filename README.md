@@ -41,6 +41,12 @@ python run_viewer.py --ply splat.ply --language_feature langfeat.pth
 
 If you want to add new stuff, check out `viewer.py` `ViewerEditor` class.
 
+# TODO: Add your needs here and we could try to implement
+[] - Object Query and Removal
+
+[] - Object Selection
+
+[] - Camera Placement: Placement and interpolate the path 
 
 ## Acknowledgment 
 

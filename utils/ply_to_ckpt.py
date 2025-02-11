@@ -153,4 +153,4 @@ def get_language_feature(ckpt_file):
     language_feature = pca.fit_transform(language_feature.detach().cpu().numpy())
     language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0)))
     print("========== Language feature loaded ==========")
-    return language_feature
+    return language_feature, pca

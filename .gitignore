@@ -4,3 +4,7 @@ output_logs/
 *.error
 *.log
 checkpoints/
+
+__pycache__/
+*/__pycache__/
+*.pyc

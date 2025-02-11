@@ -51,15 +51,18 @@ def main():
 
     server = viser.ViserServer(port=args.port, verbose=False)
 
-    _ = ViewerEditor(
+    viewer_editor = ViewerEditor(
         server=server,
         splat_args=args,
         splat_data=splat_data,
         render_fn=viewer_render_fn_partial,
         mode="rendering",
     )
+    server.scene.add_frame('origin')
+    server.scene.add_grid('grid', plane='xz')
     print("Viewer running... Ctrl+C to exit.")
-    time.sleep(100000)
+    while True:
+        time.sleep(10)
 
 
 if __name__ == "__main__":

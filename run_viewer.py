@@ -11,17 +11,17 @@ import torch
 import viser
 from core.renderer import viewer_render_fn
 from data_loader import load_data
-from viewer import ViewerEditor
+from core.viewer import ViewerEditor
+from core.splat import SplatData
+from actions.language_feature import LanguageFeature
 import functools
+from actions.base import BasicFeature
 
 def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--ply", type=str, default=None, help="Instead of ckpt, provide ply from Inria and get the view")
     parser.add_argument("--port", type=int, default=8080, help="port for the viewer server")
-    parser.add_argument(
-        "--backend", type=str, default="gsplat", help="gsplat, gsplat_legacy, inria"
-    )
     parser.add_argument("--language_feature", type=str, help="Whether to load language feature")
     parser.add_argument("--device", type=str, default="cuda", help="cuda or cpu")
     args = parser.parse_args()
@@ -31,22 +31,18 @@ def main():
 
 
     # register and open viewer
-    splat_data = load_data(args)
-    if args.language_feature:
-        means, quats, scales, opacities, colors, sh_degree, language_feature = splat_data
-    else:
-        means, quats, scales, opacities, colors, sh_degree = splat_data
+    splats = SplatData(args=args)
 
     viewer_render_fn_partial = functools.partial(viewer_render_fn, 
-                                                 means=means, 
-                                                 quats=quats, 
-                                                 scales=scales, 
-                                                 opacities=opacities, 
-                                                 colors=colors, 
-                                                 sh_degree=sh_degree, 
+                                                 means=splats._means, 
+                                                 quats=splats._quats, 
+                                                 scales=splats._scales, 
+                                                 opacities=splats._opacities, 
+                                                 colors=splats._colors, 
+                                                 sh_degree=splats._sh_degree, 
                                                  device=args.device, 
-                                                 backend=args.backend,
-                                                 mode="rgb",
+                                                 backend="gsplat",
+                                                 render_mode="rgb",
                                                  )
 
     server = viser.ViserServer(port=args.port, verbose=False)
@@ -54,12 +50,17 @@ def main():
     viewer_editor = ViewerEditor(
         server=server,
         splat_args=args,
-        splat_data=splat_data,
+        splat_data=splats,
         render_fn=viewer_render_fn_partial,
         mode="rendering",
     )
+    
+    base = BasicFeature(viewer_editor, splats)
+    language_feature = LanguageFeature(viewer_editor, splats)
+    
     server.scene.add_frame('origin')
     server.scene.add_grid('grid', plane='xz')
+    
     print("Viewer running... Ctrl+C to exit.")
     while True:
         time.sleep(10)

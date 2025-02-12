@@ -1,5 +1,4 @@
-
-from core.splat_data import SplatData
+from core.splat import SplatData
 
 class BasicFeature:
     def __init__(self, viewer, splatdata:SplatData):
@@ -20,16 +19,16 @@ class BasicFeature:
         self._feature_map = False
         self._hard_class = False
         self.mode = "rgb"
-        self.viewer.update_splat_renderer(splat_data=self.splatdata, render_mode=self.mode)
+        self.viewer.update_splat_renderer(splats=self.splatdata, render_mode=self.mode)
         
     def get_depth(self, _):
         self._feature_map = False
         self._hard_class = False
         self.mode = "depth"
-        self.viewer.update_splat_renderer(splat_data=self.splatdata, render_mode=self.mode)
+        self.viewer.update_splat_renderer(splats=self.splatdata, render_mode=self.mode)
 
     def get_normal(self, _):
         self._feature_map = False
         self._hard_class = False
         self.mode = "normal"
-        self.viewer.update_splat_renderer(splat_data=self.splatdata, render_mode=self.mode)
+        self.viewer.update_splat_renderer(splats=self.splatdata, render_mode=self.mode)

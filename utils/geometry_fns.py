@@ -19,7 +19,7 @@ def apply_unsharp_mask(depth_map, sigma=1.0, strength=1.5):
     return sharpened
 
 
-def depth_map_to_rgb(depth_map):
+def depth_to_rgb(depth_map):
     min_depth = np.min(depth_map)
     max_depth = np.max(depth_map)
     
@@ -33,7 +33,7 @@ def depth_map_to_rgb(depth_map):
     rgb_image = np.stack([grayscale_map] * 3, axis=-1)
     return rgb_image
 
-def depth_to_normal_map(depth_map):
+def depth_to_normal(depth_map):
     # Compute gradients in x and y directions
     grad_y, grad_x = np.gradient(depth_map)
 

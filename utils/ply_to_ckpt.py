@@ -1,13 +1,8 @@
 import plyfile
 import numpy as np
 import torch
-import copy
-from tqdm import tqdm
-from pathlib import Path
-from datetime import datetime
-import math
 
-from torch.cuda.amp.grad_scaler import GradScaler
+import math
 from sklearn.decomposition import PCA
 
 
@@ -29,9 +24,9 @@ def generate_gsplat_compatible_data(input_ply_file, args):
     sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
     
     if args.language_feature:
-        language_feature = get_language_feature(args.language_feature)
+        language_feature, pca = get_language_feature(args.language_feature)
         assert language_feature.shape[0] == means.shape[0], "Language feature and means must have the same number of elements"
-        return means, quats, scales, opacities, colors, sh_degree, language_feature
+        return means, quats, scales, opacities, colors, sh_degree, language_feature, pca
     else:
         return means, quats, scales, opacities, colors, sh_degree
 
@@ -149,8 +144,8 @@ def get_language_feature(ckpt_file):
     """
     print("========== Loading language feature ==========")
     pca = PCA(n_components=3)
-    (language_feature, _) = torch.load(ckpt_file)
-    language_feature = pca.fit_transform(language_feature.detach().cpu().numpy())
+    (language_feature_large, _) = torch.load(ckpt_file)
+    language_feature = pca.fit_transform(language_feature_large.detach().cpu().numpy())
     language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0)))
     print("========== Language feature loaded ==========")
-    return language_feature, pca
+    return language_feature, language_feature_large

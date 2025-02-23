@@ -46,6 +46,7 @@ class LanguageFeature:
         self.masks = None
 
         self._feature_map = False
+        self._normal_map = False
         self._hard_class = False
         self.gs_scores = torch.zeros(self.language_feature.shape[0])
         self.classes_colors = torch.zeros_like(self.language_feature)
@@ -71,6 +72,9 @@ class LanguageFeature:
             self._prune_based_on_text = self.server.gui.add_button("Prune based on text prompt")
             self._prune_based_on_text.on_click(self.prune_based_on_text)
             
+            self._feature_vis_button = self.server.gui.add_button("Normal Map")
+            self._feature_vis_button.on_click(self._toggle_normal_map)
+            
             # self._hard_class_button = self.server.gui.add_button("Hard Label Class")
             # self._hard_class_button.on_click(self._get_hard_class)
 
@@ -85,6 +89,10 @@ class LanguageFeature:
 
     def _toggle_feature_map(self, _):
         self._feature_map = True
+        self.update_splat_renderer()
+    
+    def _toggle_normal_map(self, _):
+        self._normal_map = True
         self.update_splat_renderer()
 
     def _get_text_feature(self, text):
@@ -146,8 +154,8 @@ class LanguageFeature:
         self.update_splat_renderer()
 
     def update_splat_renderer(self, device='cuda', backend='gsplat'):
-        means, quats, scales, opacities, colors, sh_degree, language_feature = self.splats.get_data().values()
-        
+        means, norms, quats, scales, opacities, colors, sh_degree, language_feature = self.splats.get_data().values()
+
         if self.gs_scores.sum() != 0:
             new_colors = colors.clone()
             new_colors[self.gs_scores > self.prune_rate] = RGB2SH(torch.tensor([1, 0, 0]).to(device)).unsqueeze(0)
@@ -172,6 +180,17 @@ class LanguageFeature:
                                           scales=scales,
                                           opacities=opacities,
                                           colors=language_feature,
+                                          sh_degree=None,
+                                          device=device,
+                                          backend=backend)
+        
+        elif self._normal_map:
+            render_fn = functools.partial(self.viewer.render_fn, 
+                                          means=means, 
+                                          quats=quats, 
+                                          scales=scales,
+                                          opacities=opacities,
+                                          colors=norms,
                                           sh_degree=None,
                                           device=device,
                                           backend=backend)

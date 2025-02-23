@@ -15,6 +15,7 @@ def generate_gsplat_compatible_data(input_ply_file, args):
     features_dc = get_features_dc(ply_file)
     features_rest = get_features_rest(ply_file, num_elements=num_elements)
     means = get_gaussian_means(ply_file)
+    norms = get_gaussian_norms(ply_file)
     scales = get_gaussians_covariances(ply_file)
     opacities = get_gaussian_opacities(ply_file)
     quats = get_gaussian_rotations(ply_file)
@@ -26,9 +27,9 @@ def generate_gsplat_compatible_data(input_ply_file, args):
     if args.language_feature:
         language_feature, pca = get_language_feature(args.language_feature)
         assert language_feature.shape[0] == means.shape[0], "Language feature and means must have the same number of elements"
-        return means, quats, scales, opacities, colors, sh_degree, language_feature, pca
+        return means, norms, quats, scales, opacities, colors, sh_degree, language_feature, pca
     else:
-        return means, quats, scales, opacities, colors, sh_degree
+        return means, norms, quats, scales, opacities, colors, sh_degree
 
 
 def get_features_dc(input_ply):
@@ -96,6 +97,29 @@ def get_gaussian_means(input_ply):
     means = torch.tensor(means, dtype=torch.float32)
 
     return means
+
+def get_gaussian_norms(input_ply):
+    """
+    Extracts the gaussian means (normal vectors) from the Inria's input ply file.
+    If a normal component ('nx', 'ny', or 'nz') is missing, it is replaced with zeros.
+    """
+    axes = ["nx", "ny", "nz"]
+
+    # Determine the number of vertices from an existing attribute (e.g., "x")
+    num_vertices = input_ply["vertex"]["x"].shape[0] if hasattr(input_ply["vertex"]["x"], "shape") else len(input_ply["vertex"]["x"])
+
+    norms = []
+    for axis in axes:
+        # Use the normal component if it exists; otherwise, create a zero array
+        if axis in input_ply["vertex"]:
+            norms.append(input_ply["vertex"][axis])
+        else:
+            norms.append(np.zeros(num_vertices))
+            
+    norms = np.stack(norms, axis=-1)
+    norms = torch.tensor(norms, dtype=torch.float32)
+    return norms
+
 
 def get_gaussians_covariances(input_ply):
     """

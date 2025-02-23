@@ -24,24 +24,25 @@ class SplatData:
         if args.ply is not None:
             gaussian_params = generate_gsplat_compatible_data(args.ply, args)
             if args.language_feature:
-                means, quats, scales, opacities, colors, sh_degree, language_feature, language_feature_large = gaussian_params
+                means, norms, quats, scales, opacities, colors, sh_degree, language_feature, language_feature_large = gaussian_params
                 language_feature = language_feature.to(device)
                 language_feature_large = language_feature_large.to(device)
             else:
-                means, quats, scales, opacities, colors, sh_degree = gaussian_params
+                means, norms, quats, scales, opacities, colors, sh_degree = gaussian_params
                 
             means = means.to(device)
             quats = quats.to(device)
             scales = scales.to(device)
             opacities = opacities.to(device)
             colors = colors.to(device)
-
+            norms = norms.to(device)
             quats = quats / quats.norm(dim=-1, keepdim=True)
             scales = torch.exp(scales)
             opacities = torch.sigmoid(opacities).squeeze(-1)
 
         if args.language_feature:
             self._means = means
+            self._norms = norms
             self._quats = quats
             self._scales = scales
             self._opacities = opacities
@@ -51,6 +52,7 @@ class SplatData:
             self.language_feature_large = language_feature_large
         else:
             self._means = means
+            self._norms = norms
             self._quats = quats
             self._scales = scales
             self._opacities = opacities
@@ -61,6 +63,7 @@ class SplatData:
         if self._language_feature is not None:
             splat_data = {
                 'means': self._means,
+                'norms': self._norms,
                 'quats': self._quats,
                 'scales': self._scales,
                 'opacities': self._opacities,
@@ -71,6 +74,7 @@ class SplatData:
         else:
             splat_data = {
                 'means': self._means,
+                'norms': self._norms,
                 'quats': self._quats,
                 'scales': self._scales,
                 'opacities': self._opacities,

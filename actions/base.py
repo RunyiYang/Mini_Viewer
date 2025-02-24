@@ -16,7 +16,7 @@ class BasicFeature:
             self._normal.on_click(self.get_normal)
       
     def get_rgb(self, _):
-        self._feature_map = False
+        # self._feature_map = False
         self._normal_map = False
         self._hard_class = False
         self.mode = "rgb"

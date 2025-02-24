@@ -120,7 +120,7 @@ class ViewerEditor(nerfview.Viewer):
         render_fn = functools.partial(self.render_fn, 
                                                         means= splat_data["means"],
                                                         quats= splat_data["quats"],
-                                                        norms= splat_data["norms"],
+                                                        # norms= splat_data["norms"],
                                                         scales = splat_data["scales"],
                                                         opacities = splat_data["opacities"],
                                                         colors = splat_data["colors"],

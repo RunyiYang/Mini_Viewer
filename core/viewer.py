@@ -8,8 +8,10 @@ from plyfile import PlyData, PlyElement  # PlyFile import
 import numpy as np
 import pdb
 import os
+import pdb
 import viser
 from core.splat import SplatData
+from PIL import Image
 
 class ViewerEditor(nerfview.Viewer):
 
@@ -149,3 +151,31 @@ class ViewerEditor(nerfview.Viewer):
                                             img_wh)
         
         return render_rgbs
+    
+    def snapshot(self, idx):
+        """
+        Take a snapshot of the scene, replace the black background with white,
+        and save the image.
+        """
+        client = self.server.get_clients()[0]
+        render_rgbs = self.call_renderer(client)
+        
+        # Ensure the image values are in the [0, 1] range and convert to 8-bit
+        image = np.clip(render_rgbs, 0, 1)
+        image_uint8 = (image * 255).astype(np.uint8)
+        
+        # Define a threshold to detect "background" pixels.
+        # Pixels with all channels below this threshold are considered background.
+        threshold = 1  # adjust if needed
+        background_mask = np.all(image_uint8 < threshold, axis=-1)
+        
+        # Replace background pixels with white (255,255,255)
+        image_uint8[background_mask] = [255, 255, 255]
+        
+        # Save the image using Pillow
+        pil_image = Image.fromarray(image_uint8)
+        pil_image.save("./snapshot"+str(idx)+".png")
+        
+        print("Image saved to ./snapshot",idx,"+.png")
+        idx=idx+1
+        return idx

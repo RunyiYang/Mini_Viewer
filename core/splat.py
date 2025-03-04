@@ -51,7 +51,7 @@ class SplatData:
             colors = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'color.npy'))).float() / 255.0
             sh_degree = None
             if args.language_feature:
-                language_feature_large = np.load(os.path.join(args.folder_npy, 'lang_feat64.npy'))
+                language_feature_large = np.load(os.path.join(args.folder_npy, args.language_feature)+'.npy')
                 pca = PCA(n_components=3)
                 language_feature = pca.fit_transform(language_feature_large)
                 language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0))).to(device)

@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--port", type=int, default=8080, help="port for the viewer server")
     parser.add_argument("--language_feature", type=str, help="Whether to load language feature")
     parser.add_argument("--device", type=str, default="cuda", help="cuda or cpu")
+    parser.add_argument("--folder_npy", type=str, default=None, help="npy folder to load the data")
     args = parser.parse_args()
 
     torch.manual_seed(42)

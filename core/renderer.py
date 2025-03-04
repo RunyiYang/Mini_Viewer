@@ -55,6 +55,7 @@ def viewer_render_fn(camera_state: nerfview.CameraState,
         width,
         height,
         sh_degree=sh_degree,
+        backgrounds = torch.tensor([1.0, 1.0, 1.0], device=device).reshape(1, 3),
         render_mode="RGB+D",
         # this is to speedup large-scale rendering by skipping far-away Gaussians.
         radius_clip=3,

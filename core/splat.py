@@ -1,7 +1,9 @@
 import torch
 import plyfile
 from utils.ply_to_ckpt import generate_gsplat_compatible_data
-
+import numpy as np
+import os
+from sklearn.decomposition import PCA
 
 class SplatData:
     def __init__(self, args=None):
@@ -29,16 +31,43 @@ class SplatData:
                 language_feature_large = language_feature_large.to(device)
             else:
                 means, norms, quats, scales, opacities, colors, sh_degree = gaussian_params
-                
-            means = means.to(device)
-            quats = quats.to(device)
-            scales = scales.to(device)
-            opacities = opacities.to(device)
-            colors = colors.to(device)
-            norms = norms.to(device)
+            
+            
             quats = quats / quats.norm(dim=-1, keepdim=True)
             scales = torch.exp(scales)
             opacities = torch.sigmoid(opacities).squeeze(-1)
+        
+        
+        
+        if args.folder_npy is not None:
+            # Load data as before
+                        # Optional: Prune entries where any dimension of scale is >= 1
+
+            means = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'coord.npy'))).float()
+            norms = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'normal.npy'))).float()
+            quats = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'quat.npy'))).float()
+            scales = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'scale.npy'))).float()
+            opacities = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'opacity.npy'))).float()
+            colors = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'color.npy'))).float() / 255.0
+            sh_degree = None
+            if args.language_feature:
+                language_feature_large = np.load(os.path.join(args.folder_npy, 'lang_feat64.npy'))
+                pca = PCA(n_components=3)
+                language_feature = pca.fit_transform(language_feature_large)
+                language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0))).to(device)
+
+
+
+        means = means.to(device)
+        quats = quats.to(device)
+        scales = scales.to(device)
+        opacities = opacities.to(device)
+        colors = colors.to(device)
+        norms = norms.to(device)
+        quats = quats.to(device)
+        scales = scales.to(device)
+        opacities = opacities.to(device)
+        
 
         if args.language_feature:
             self._means = means

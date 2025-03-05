@@ -49,12 +49,22 @@ class SplatData:
             scales = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'scale.npy'))).float()
             opacities = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'opacity.npy'))).float()
             colors = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'color.npy'))).float() / 255.0
+            if args.prune:
+                mask = (scales < 0.1).all(dim=-1)
+                means = means[mask]
+                norms = norms[mask]
+                quats = quats[mask]
+                scales = scales[mask]
+                opacities = opacities[mask]
+                colors = colors[mask]
+            else:
+                mask = torch.ones(means.shape[0])
             sh_degree = None
             if args.language_feature:
-                language_feature_large = np.load(os.path.join(args.folder_npy, args.language_feature)+'.npy')
+                language_feature_large = np.load(os.path.join(args.folder_npy, args.language_feature)+'.npy')[mask.numpy()]
                 pca = PCA(n_components=3)
                 language_feature = pca.fit_transform(language_feature_large)
-                language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0))).to(device)
+                language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0))).to(torch.float).to(device)
 
 
 

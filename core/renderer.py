@@ -18,10 +18,12 @@ def viewer_render_fn(camera_state: nerfview.CameraState,
                      device: str,
                      backend: str = "gsplat",
                      render_mode="rgb",
+                     fov=45.0 / 180 * 3.1415,
                      ):
     
     width, height = img_wh
     c2w = camera_state.c2w
+    camera_state.fov = fov
     K = camera_state.get_K(img_wh)
 
     c2w = torch.from_numpy(c2w).float().to(device)

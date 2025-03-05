@@ -12,6 +12,15 @@ import pdb
 import viser
 from core.splat import SplatData
 from PIL import Image
+from typing import TYPE_CHECKING, Literal, Optional, Tuple, get_args
+import dataclasses
+import json
+
+RenderAction = Literal["rerender", "move", "static", "update"]
+@dataclasses.dataclass
+class RenderTask(object):
+    action: RenderAction
+    camera_state: Optional["CameraState"] = None
 
 class ViewerEditor(nerfview.Viewer):
 
@@ -27,17 +36,39 @@ class ViewerEditor(nerfview.Viewer):
         self.mode = "rgb"
         self.splats = splat_data
         self.adjust_viewer()
+        if os.path.exists(".tmp/camera_state.json"):
+            with open(".tmp/camera_state.json", "r") as f:
+                camera_state_dict = json.load(f)
+            self.camera_state = nerfview.CameraState(
+                c2w=np.array(camera_state_dict["c2w"]),
+                fov=camera_state_dict["fov"],
+                aspect=camera_state_dict["aspect"],
+            )
+
         
     def adjust_viewer(self):
         """
         Adjust the inherited viewer.
         """
+        if os.path.exists(".tmp/camera_state.json"):
+            with open(".tmp/camera_state.json", "r") as f:
+                camera_state_dict = json.load(f)
+            self.camera_state = nerfview.CameraState(
+                c2w=np.array(camera_state_dict["c2w"]),
+                fov=camera_state_dict["fov"] / np.pi * 180,
+                aspect=camera_state_dict["aspect"],
+            )
+  
         with self._rendering_folder:
             self._max_img_res_slider.remove()
             self._max_img_res_slider = self.server.gui.add_slider(
-                "Max Img Res", min=64, max=2048, step=1, initial_value=512
+                "Max Img Res", min=64, max=4096, step=1, initial_value=512
             )
             self._max_img_res_slider.on_update(self.rerender)
+            self._fov_slider = self.server.gui.add_slider(
+                "FOV", min=1, max=180, step=1, initial_value=self.camera_state.fov if os.path.exists(".tmp/camera_state.json") else 45
+            )
+            self._fov_slider.on_update(self.rerender_K)
             
         @self.server.on_client_connect
         def handle_client_connect(client: viser.ClientHandle):
@@ -47,8 +78,10 @@ class ViewerEditor(nerfview.Viewer):
             # client.camera.position = np.array([0.0, 0.0, -10.0])
             client.camera.position = self.splat_central_point + np.array([0.0, 0.0, -10.0])
             client.camera.wxyz = np.array([0.0, 0.0, 0.0, 1.0])
-
-        
+            if os.path.exists(".tmp/camera_state.json"):
+                client.camera.position = self.camera_state.c2w[:3, 3]
+                R = self.camera_state.c2w[:3, :3]
+                client.camera.wxyz = rotation_matrix_to_quaternion(R)
 
 
     def find_splat_central_point(self) -> np.ndarray:
@@ -159,7 +192,12 @@ class ViewerEditor(nerfview.Viewer):
         """
         client = self.server.get_clients()[0]
         render_rgbs = self.call_renderer(client)
-        
+        camera_state = self.get_camera_state(client)
+        camera_state_dict = {
+            "c2w": camera_state.c2w.tolist(),
+            "fov": client.camera.fov,
+            "aspect": camera_state.aspect,
+        }
         # Ensure the image values are in the [0, 1] range and convert to 8-bit
         image = np.clip(render_rgbs, 0, 1)
         image_uint8 = (image * 255).astype(np.uint8)
@@ -175,7 +213,59 @@ class ViewerEditor(nerfview.Viewer):
         # Save the image using Pillow
         pil_image = Image.fromarray(image_uint8)
         pil_image.save("./snapshot"+str(idx)+".png")
-        
+        tmp_dir = ".tmp"
+        os.makedirs(tmp_dir, exist_ok=True)  # create directory if it doesn't exist
+        camera_state_path = os.path.join(tmp_dir, "camera_state.json")
+        with open(camera_state_path, "w") as f:
+            json.dump(camera_state_dict, f, indent=4)
         print("Image saved to ./snapshot",idx,"+.png")
+        
         idx=idx+1
         return idx
+    
+    def rerender_K(self, K):
+        K = K.target.value / 180.0 * np.pi
+        render_fn = functools.partial(self.render_fn, fov=K)
+        client = self.server.get_clients()[0]
+        client.camera.fov = K
+        self.render_fn = render_fn
+        self.rerender(None)
+        
+
+
+def rotation_matrix_to_quaternion(R):
+    """
+    Convert a 3x3 rotation matrix to a quaternion (w, x, y, z).
+    """
+    m00, m01, m02 = R[0, 0], R[0, 1], R[0, 2]
+    m10, m11, m12 = R[1, 0], R[1, 1], R[1, 2]
+    m20, m21, m22 = R[2, 0], R[2, 1], R[2, 2]
+    
+    trace = m00 + m11 + m22
+
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (m21 - m12) * s
+        y = (m02 - m20) * s
+        z = (m10 - m01) * s
+    elif (m00 > m11) and (m00 > m22):
+        s = 2.0 * np.sqrt(1.0 + m00 - m11 - m22)
+        w = (m21 - m12) / s
+        x = 0.25 * s
+        y = (m01 + m10) / s
+        z = (m02 + m20) / s
+    elif m11 > m22:
+        s = 2.0 * np.sqrt(1.0 + m11 - m00 - m22)
+        w = (m02 - m20) / s
+        x = (m01 + m10) / s
+        y = 0.25 * s
+        z = (m12 + m21) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + m22 - m00 - m11)
+        w = (m10 - m01) / s
+        x = (m02 + m20) / s
+        y = (m12 + m21) / s
+        z = 0.25 * s
+
+    return np.array([w, x, y, z])

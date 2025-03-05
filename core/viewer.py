@@ -62,13 +62,14 @@ class ViewerEditor(nerfview.Viewer):
         with self._rendering_folder:
             self._max_img_res_slider.remove()
             self._max_img_res_slider = self.server.gui.add_slider(
-                "Max Img Res", min=64, max=4096, step=1, initial_value=512
+                "Max Img Res", min=64, max=2048, step=1, initial_value=1920
             )
             self._max_img_res_slider.on_update(self.rerender)
             self._fov_slider = self.server.gui.add_slider(
-                "FOV", min=1, max=180, step=1, initial_value=self.camera_state.fov if os.path.exists(".tmp/camera_state.json") else 45
+                "FOV", min=10, max=120, step=1, initial_value=self.camera_state.fov if os.path.exists(".tmp/camera_state.json") else 45
             )
             self._fov_slider.on_update(self.rerender_K)
+           
             
         @self.server.on_client_connect
         def handle_client_connect(client: viser.ClientHandle):
@@ -90,26 +91,6 @@ class ViewerEditor(nerfview.Viewer):
         """
         means = self.splats._means
         return torch.mean(means, 0).cpu().numpy()
-            # with self.server.gui.add_folder("Basic"):
-            #     self._rgb = self.server.gui.add_button("RGB")
-            #     self._rgb.on_click(self.get_rgb)
-                
-            #     self._depth = self.server.gui.add_button("Depth")
-            #     self._depth.on_click(self.get_depth)
-                
-            #     self._alpha = self.server.gui.add_button("Normal")
-            #     self._alpha.on_click(self.get_alpha)
-            
-            # if self.splat_args.language_feature:
-            #     with self.server.gui.add_folder("Feature"):
-            #         self._feature_vis_button = self.server.gui.add_button("Feature Map")
-            #         self._feature_vis_button.on_click(self._toggle_feature_map)
-                    
-            #         # Add button to export PLY file
-            #         self._export_ply_button = self.server.gui.add_button("Export PLY")
-            #         self._export_ply_button.on_click(lambda _: self.save_as_ply())
-                    
-            # self.update_splat_renderer()
 
     def update_splat_renderer(self, 
                                     splats: SplatData = None,
@@ -231,7 +212,11 @@ class ViewerEditor(nerfview.Viewer):
         self.render_fn = render_fn
         self.rerender(None)
         
-
+    def move(self, x):
+        print(x)
+        print(dir(x))
+        print(x.target.value)
+        self.rerender(None)
 
 def rotation_matrix_to_quaternion(R):
     """

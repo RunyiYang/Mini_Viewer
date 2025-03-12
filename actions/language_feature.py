@@ -13,8 +13,7 @@ import numpy as np
 from utils.color_shs import RGB2SH
 from core.splat import SplatData
 import functools
-from models.clip_query import OpenCLIPNetwork, OpenCLIPNetworkConfig, get_text_feature
-
+from models.clip_query import OpenCLIPNetwork, OpenCLIPNetworkConfig, get_text_feature, SigLIPNetwork, SigLIPNetworkConfig
 
 class CosineClassifier(nn.Module):
     def __init__(self, temp=0.05):
@@ -29,8 +28,13 @@ class CosineClassifier(nn.Module):
         img_norm = F.normalize(img, dim=-1)
         concept_norm = F.normalize(concept, dim=-1)
         pred = torch.matmul(img_norm, concept_norm.transpose(0, 1))
+        
         if scale:
             pred = pred / self.temp
+            
+        pred = torch.sigmoid(pred)
+        
+        print(pred, pred.min(), pred.max())
         pred = (pred - pred.min()) / (pred.max() - pred.min())
         return pred
 
@@ -56,8 +60,10 @@ class LanguageFeature:
         
         self.encoder_hidden_dims = [256, 128, 64, 32, 3]
         self.decoder_hidden_dims = [16, 32, 64, 128, 256, 256, 512]
-        self.config = OpenCLIPNetworkConfig()
-        self.network = OpenCLIPNetwork(self.config)
+        self.config = SigLIPNetworkConfig()
+        self.network = SigLIPNetwork(self.config)
+        # self.config = OpenCLIPNetworkConfig()
+        # self.network = OpenCLIPNetwork(self.config)
         self.language_feature_large = splatdata.get_large()
     
         with self.server.gui.add_folder(label="Language Feature"):
@@ -96,7 +102,9 @@ class LanguageFeature:
         self.update_splat_renderer()
 
     def _get_text_feature(self, text):
-        text_feature = get_text_feature(self.network, text)
+        text_feature = self.network.encode_text(text)
+        # text_feature = get_text_feature(self.network, text)
+        # text_feature = torch.sigmoid(text_feature)
         return text_feature
         
     def update_class_number(self, num):

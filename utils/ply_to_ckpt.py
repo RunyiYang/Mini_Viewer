@@ -26,7 +26,7 @@ def generate_gsplat_compatible_data(input_ply_file, args):
     
     if args.language_feature:
         language_feature, pca = get_language_feature(args.language_feature)
-        assert language_feature.shape[0] == means.shape[0], "Language feature and means must have the same number of elements"
+        assert language_feature.shape[0] == means.shape[0], f"Language feature and means must have the same number of elements, {language_feature.shape[0], means.shape[0]}"
         return means, norms, quats, scales, opacities, colors, sh_degree, language_feature, pca
     else:
         return means, norms, quats, scales, opacities, colors, sh_degree
@@ -167,9 +167,13 @@ def get_language_feature(ckpt_file):
     Extracts the language feature from the Inria's input ply file.
     """
     print("========== Loading language feature ==========")
+    if ckpt_file.endswith(".npy"):
+        language_feature_large = np.load(ckpt_file)
+    elif ckpt_file.endswith(".pth"):
+        (language_feature_large, _) = torch.load(ckpt_file)
+        language_feature_large = language_feature_large.detach().cpu().numpy()
     pca = PCA(n_components=3)
-    (language_feature_large, _) = torch.load(ckpt_file)
-    language_feature = pca.fit_transform(language_feature_large.detach().cpu().numpy())
+    language_feature = pca.fit_transform(language_feature_large)
     language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0)))
     print("========== Language feature loaded ==========")
     return language_feature, language_feature_large

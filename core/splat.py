@@ -27,8 +27,8 @@ class SplatData:
             gaussian_params = generate_gsplat_compatible_data(args.ply, args)
             if args.language_feature:
                 means, norms, quats, scales, opacities, colors, sh_degree, language_feature, language_feature_large = gaussian_params
-                language_feature = language_feature.to(device)
-                language_feature_large = language_feature_large.to(device)
+                language_feature = torch.tensor(language_feature).to(device).to(torch.float32)
+                language_feature_large = torch.tensor(language_feature_large).to(device).to(torch.float32)
             else:
                 means, norms, quats, scales, opacities, colors, sh_degree = gaussian_params
             
@@ -42,16 +42,20 @@ class SplatData:
         if args.folder_npy is not None:
             # Load data as before
                         # Optional: Prune entries where any dimension of scale is >= 1
-            masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
+            
             means = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'coord.npy'))).float()
-            norms = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'normal.npy'))).float()
+            if os.path.exists(os.path.join(args.folder_npy, 'normal.npy')):
+                norms = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'normal.npy'))).float()
+            else:
+                norms = torch.zeros(means.shape)
             quats = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'quat.npy'))).float()
             scales = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'scale.npy'))).float()
             opacities = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'opacity.npy'))).float()
             colors = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'color.npy'))).float() / 255.0
             
-            
+            self.save_params_histograms(means, scales, colors, opacities)
             if args.prune:
+                masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
                 mask = (scales < 0.5).all(dim=-1) & masks & (means[:,2] < 2) 
             else:
                 mask = torch.ones(means.shape[0], dtype=torch.bool)
@@ -64,14 +68,18 @@ class SplatData:
             opacities = opacities[mask]
             colors = colors[mask]
             if args.language_feature:
-                language_feature_large = np.load(os.path.join(args.folder_npy, args.language_feature)+'.npy')[mask.numpy()]
+                if ".pth" in args.language_feature:
+                    language_feature_large = torch.load(os.path.join(args.folder_npy, args.language_feature))[mask].detach().to("cpu").numpy()
+                    print(language_feature_large.shape)
+                else:
+                    language_feature_large = np.load(os.path.join(args.folder_npy, args.language_feature)+'.npy')[mask.numpy()]
                 pca = PCA(n_components=3)
                 language_feature = pca.fit_transform(language_feature_large)
                 language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0))).to(torch.float).to(device)
-
+                language_feature_large = torch.tensor(language_feature_large).to(torch.float).to(device)
 
         # Get me the all params histogram and save to the data folder
-        self.save_params_histograms(means, scales, colors, opacities)
+        # self.save_params_histograms(means, scales, colors, opacities)
         means = means.to(device)
         quats = quats.to(device)
         scales = scales.to(device)

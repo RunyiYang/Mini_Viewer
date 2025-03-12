@@ -2,13 +2,16 @@
 Adapted codebase for loading Inria's ply files. To add features, you need an ckpt file to store all of the features of the ply file. 
 
 ## Install 
-Python 3.10 and CUDA 11.8 are recommended for this package.
+Python 3.10 and CUDA 12.4 are successfully tested. The main issues is that flash-attn need CUDA>12.3.
 
 ```
     micromamba create -n viewer python=3.10 -y
     micromamba activate viewer 
     pip install -r requirements.txt
-    pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu118
+    pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu124
+    pip install git+https://github.com/huggingface/transformers@v4.49.0-SigLIP-2
+    pip install gsplat --index-url https://docs.gsplat.studio/whl/pt24cu124
+    pip install flash-attn --no-build-isolation
 ```
 
 ### CUDA Version
@@ -19,9 +22,9 @@ export CC=/usr/bin/gcc-11.5
 export CXX=/usr/bin/g++-11.5
 export LD=/usr/bin/g++-11.5
 export TORCH_CUDA_ARCH_LIST="8.6;8.9" # You need to checkout the compute capability of your device. In insait server, A6000 is 8.6, l4-24g is 8.9
-export LD_LIBRARY_PATH=/opt/modules/nvidia-cuda-11.8.0/lib64:$LD_LIBRARY_PATH
-export PATH=/opt/modules/nvidia-cuda-11.8.0/bin:$PATH
-export CPLUS_INCLUDE_PATH=/opt/modules/nvidia-cuda-11.8.0/include
+export LD_LIBRARY_PATH=/opt/modules/nvidia-cuda-12.4.0/lib64:$LD_LIBRARY_PATH
+export PATH=/opt/modules/nvidia-cuda-12.4.0/bin:$PATH
+export CPLUS_INCLUDE_PATH=/opt/modules/nvidia-cuda-12.4.0/include
 ```
 
 

@@ -54,3 +54,39 @@ If you want to add new stuff, check out `viewer.py` `ViewerEditor` class.
 ## Acknowledgment 
 
 https://github.com/hangg7/nerfview - no license yet.
+
+## Citations
+If you use this library or find the repo useful for your research, please consider citing:
+
+```
+@article{wu2023mars,
+  author    = {Wu, Zirui and Liu, Tianyu and Luo, Liyi and Zhong, Zhide and Chen, Jianteng and Xiao, Hongmin and Hou, Chao and Lou, Haozhe and Chen, Yuantao and Yang, Runyi and Huang, Yuxin and Ye, Xiaoyu and Yan, Zike and Shi, Yongliang and Liao, Yiyi and Zhao, Hao},
+  title     = {MARS: An Instance-aware, Modular and Realistic Simulator for Autonomous Driving},
+  journal   = {CICAI},
+  year      = {2023},
+}
+
+@misc{yang2024spectrally,
+      title={Spectrally Pruned Gaussian Fields with Neural Compensation}, 
+      author={Runyi Yang and Zhenxin Zhu and Zhou Jiang and Baijun Ye and Xiaoxue Chen and Yifei Zhang and Yuantao Chen and Jian Zhao and Hao Zhao},
+      year={2024},
+      eprint={2405.00676},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+
+@article{zheng2024gaussiangrasper,
+  title={Gaussiangrasper: 3d language gaussian splatting for open-vocabulary robotic grasping},
+  author={Zheng, Yuhang and Chen, Xiangyu and Zheng, Yupeng and Gu, Songen and Yang, Runyi and Jin, Bu and Li, Pengfei and Zhong, Chengliang and Wang, Zengmao and Liu, Lina and others},
+  journal={IEEE Robotics and Automation Letters},
+  year={2024},
+  publisher={IEEE}
+}
+
+@article{li2025scenesplat,
+  title={SceneSplat: Gaussian Splatting-based Scene Understanding with Vision-Language Pretraining},
+  author={Li, Yue and Ma, Qi and Yang, Runyi and Li, Huapeng and Ma, Mengjiao and Ren, Bin and Popovic, Nikola and Sebe, Nicu and Konukoglu, Ender and Gevers, Theo and others},
+  journal={arXiv preprint arXiv:2503.18052},
+  year={2025}
+}
+```

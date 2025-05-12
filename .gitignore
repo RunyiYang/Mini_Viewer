@@ -12,3 +12,5 @@ teaser/
 datastats/
 results/
 data/
+figs/
+figs/*

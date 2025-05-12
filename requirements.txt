@@ -1,5 +1,5 @@
-nerfview
-viser
+nerfview==0.0.3
+viser==0.2.23
 gsplat
 plyfile
 opencv-python

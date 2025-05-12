@@ -169,7 +169,7 @@ class LanguageFeature:
 
     def update_splat_renderer(self, device='cuda', backend='gsplat'):
         means, norms, quats, scales, opacities, colors, sh_degree, language_feature = self.splats.get_data().values()
-
+        print(self._feature_map, self._normal_map)
         if self.gs_scores.sum() != 0:
             new_colors = colors.clone()
             new_colors[self.gs_scores > self.prune_rate] = RGB2SH(torch.tensor([1, 0, 0]).to(device)).unsqueeze(0)

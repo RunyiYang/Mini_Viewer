@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--device", type=str, default="cuda", help="cuda or cpu")
     parser.add_argument("--folder_npy", type=str, default=None, help="npy folder to load the data")
     parser.add_argument("--prune", type=str, help="Whether to prune the data")
+    parser.add_argument("--feature_type", type=str, default="siglip", help="clip or siglip")
     args = parser.parse_args()
 
     torch.manual_seed(42)
@@ -58,7 +59,7 @@ def main():
     )
     
     base = BasicFeature(viewer_editor, splats)
-    language_feature = LanguageFeature(viewer_editor, splats)
+    language_feature = LanguageFeature(viewer_editor, splats, feature_type=args.feature_type)
     
     server.scene.add_frame('origin')
     server.scene.add_grid('grid', plane='xz')

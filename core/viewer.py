@@ -60,7 +60,7 @@ class ViewerEditor(nerfview.Viewer):
             )
   
         with self._rendering_folder:
-            self._max_img_res_slider.remove()
+            # self._max_img_res_slider.remove()
             self._max_img_res_slider = self.server.gui.add_slider(
                 "Max Img Res", min=64, max=2048, step=1, initial_value=1920
             )

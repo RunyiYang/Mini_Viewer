@@ -40,7 +40,7 @@ class CosineClassifier(nn.Module):
 
 
 class LanguageFeature:
-    def __init__(self, viewer, splatdata: SplatData):
+    def __init__(self, viewer, splatdata: SplatData, feature_type="siglip"):
         self.viewer = viewer
         self.server = viewer.server
         self.splats = splatdata
@@ -60,8 +60,14 @@ class LanguageFeature:
         
         self.encoder_hidden_dims = [256, 128, 64, 32, 3]
         self.decoder_hidden_dims = [16, 32, 64, 128, 256, 256, 512]
-        self.config = SigLIPNetworkConfig()
-        self.network = SigLIPNetwork(self.config)
+        if feature_type == "siglip":
+            self.config = SigLIPNetworkConfig()
+            self.network = SigLIPNetwork(self.config)
+        elif feature_type == "clip":
+            self.config = OpenCLIPNetworkConfig()
+            self.network = OpenCLIPNetwork(self.config)
+        # self.config = SigLIPNetworkConfig()
+        # self.network = SigLIPNetwork(self.config)
         # self.config = OpenCLIPNetworkConfig()
         # self.network = OpenCLIPNetwork(self.config)
         self.language_feature_large = splatdata.get_large()

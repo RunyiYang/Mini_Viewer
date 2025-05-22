@@ -14,3 +14,5 @@ results/
 data/
 figs/
 figs/*
+*.npy
+.tmp/

@@ -4,6 +4,7 @@ from utils.ply_to_ckpt import generate_gsplat_compatible_data
 import numpy as np
 import os
 from sklearn.decomposition import PCA
+from utils.color_shs import RGB2SH, SH2RGB
 
 class SplatData:
     def __init__(self, args=None):
@@ -29,9 +30,29 @@ class SplatData:
                 means, norms, quats, scales, opacities, colors, sh_degree, language_feature, language_feature_large = gaussian_params
                 language_feature = torch.tensor(language_feature).to(device).to(torch.float32)
                 language_feature_large = torch.tensor(language_feature_large).to(device).to(torch.float32)
+                colors = SH2RGB(colors, sh_degree)
+                sh_degree = None
             else:
                 means, norms, quats, scales, opacities, colors, sh_degree = gaussian_params
+            if args.prune:
+                # masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
+                mask = (scales < 0.5).all(dim=-1) & (opacities > 0.8).all(dim=-1)
+                print(f"There are {mask.sum()} valid splats out of {means.shape[0]}")
             
+            else:
+                mask = torch.ones(means.shape[0], dtype=torch.bool)
+            
+            means = means[mask]
+            norms = norms[mask]
+            quats = quats[mask]
+            scales = scales[mask]
+            opacities = opacities[mask]
+            colors = colors[mask]
+            
+            if args.language_feature:
+                language_feature = language_feature[mask]
+                language_feature_large = language_feature_large[mask]
+                
             
             quats = quats / quats.norm(dim=-1, keepdim=True)
             scales = torch.exp(scales)
@@ -56,7 +77,9 @@ class SplatData:
             self.save_params_histograms(means, scales, colors, opacities)
             if args.prune:
                 masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
-                mask = (scales < 0.5).all(dim=-1) & masks & (means[:,2] < 2) 
+                mask =  (scales < 0.5).all(dim=-1) & masks & (means[:, 2] < 2.0)
+                # 
+                print(f"There are {mask.sum()} valid splats out of {means.shape[0]}")
             else:
                 mask = torch.ones(means.shape[0], dtype=torch.bool)
             sh_degree = None

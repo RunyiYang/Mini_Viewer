@@ -57,6 +57,7 @@ class LanguageFeature:
         self.labels = torch.zeros(self.language_feature.shape[0])
         self.cluster_centers = None
         self.class_id = -1
+        self.query_feature = None
         
         self.encoder_hidden_dims = [256, 128, 64, 32, 3]
         self.decoder_hidden_dims = [16, 32, 64, 128, 256, 256, 512]
@@ -66,6 +67,9 @@ class LanguageFeature:
         elif feature_type == "clip":
             self.config = OpenCLIPNetworkConfig()
             self.network = OpenCLIPNetwork(self.config)
+        else:
+            self.network = None
+            self.query_feature = torch.tensor(np.load(feature_type)[0]).to(splatdata.device)
         # self.config = SigLIPNetworkConfig()
         # self.network = SigLIPNetwork(self.config)
         # self.config = OpenCLIPNetworkConfig()
@@ -137,6 +141,13 @@ class LanguageFeature:
         print(text)
         if text == "all":
             self.gs_scores = torch.zeros(self.language_feature.shape[0]).to(self.language_feature.device)
+        elif self.query_feature is not None:
+            new_feature = self.query_feature.to(torch.float)
+            # new_feature = self._get_text_feature(text).to(torch.float)
+            # gs_featuers = self.pca.inverse_transform(self.language_feature.detach().cpu().numpy())
+            Cos = CosineClassifier()
+            scores = Cos(new_feature, self.language_feature_large, scale=False).squeeze(0)
+            self.gs_scores = scores
         else: 
             new_feature = self._get_text_feature(text).to(torch.float)
             # gs_featuers = self.pca.inverse_transform(self.language_feature.detach().cpu().numpy())
@@ -169,7 +180,7 @@ class LanguageFeature:
 
     def update_splat_renderer(self, device='cuda', backend='gsplat'):
         means, norms, quats, scales, opacities, colors, sh_degree, language_feature = self.splats.get_data().values()
-        print(self._feature_map, self._normal_map)
+        # print(self._feature_map, self._normal_map)
         if self.gs_scores.sum() != 0:
             new_colors = colors.clone()
             new_colors[self.gs_scores > self.prune_rate] = RGB2SH(torch.tensor([1, 0, 0]).to(device)).unsqueeze(0)

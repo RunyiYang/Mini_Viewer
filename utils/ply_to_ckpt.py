@@ -170,8 +170,13 @@ def get_language_feature(ckpt_file):
     if ckpt_file.endswith(".npy"):
         language_feature_large = np.load(ckpt_file)
     elif ckpt_file.endswith(".pth"):
-        (language_feature_large, _) = torch.load(ckpt_file)
+        try: 
+            (language_feature_large, _) = torch.load(ckpt_file)
+        except:
+            language_feature_large = torch.load(ckpt_file)
         language_feature_large = language_feature_large.detach().cpu().numpy()
+    else:
+        raise ValueError("Unsupported file format. Please provide a .npy or .pth file.")
     pca = PCA(n_components=3)
     language_feature = pca.fit_transform(language_feature_large)
     language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0)))

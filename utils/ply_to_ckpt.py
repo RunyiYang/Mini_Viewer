@@ -166,19 +166,18 @@ def get_language_feature(ckpt_file):
     """
     Extracts the language feature from the Inria's input ply file.
     """
-    print("========== Loading language feature ==========")
+    print("================== Loading language feature ==================")
     if ckpt_file.endswith(".npy"):
         language_feature_large = np.load(ckpt_file)
     elif ckpt_file.endswith(".pth"):
-        try: 
-            (language_feature_large, _) = torch.load(ckpt_file)
-        except:
-            language_feature_large = torch.load(ckpt_file)
+        result = torch.load(ckpt_file)
+        if isinstance(result, tuple):
+            language_feature_large = result[0]
+        else:
+            language_feature_large = result
         language_feature_large = language_feature_large.detach().cpu().numpy()
-    else:
-        raise ValueError("Unsupported file format. Please provide a .npy or .pth file.")
     pca = PCA(n_components=3)
     language_feature = pca.fit_transform(language_feature_large)
     language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0)))
-    print("========== Language feature loaded ==========")
+    print("================== Language feature loaded ==================")
     return language_feature, language_feature_large

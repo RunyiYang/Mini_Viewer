@@ -69,6 +69,6 @@ def viewer_render_fn(camera_state: nerfview.CameraState,
     elif render_mode == "depth":
         return depth_to_rgb(render_depths)
     elif render_mode == "normal":
-        return depth_to_normal(render_depths)
+        return depth_to_normal(render_depths, K=K)
     else:
         return render_rgbs

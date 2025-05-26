@@ -20,8 +20,8 @@ def SH2RGB(sh, degree=0):
     output_rgb = zeroth_order_spherical_harmonics_to_rgb(input_sh)
 
     # check if it's tensor
-    # if type(sh) == torch.Tensor:
-    #     output_rgb = output_rgb.cpu().detach().numpy()
+    if type(sh) == torch.Tensor:
+        output_rgb = output_rgb.cpu().detach().numpy()
     
     return output_rgb
 

@@ -35,6 +35,10 @@ python run_viewer.py --ply splat.ply
 ### Run with Language Features
 ```
 python run_viewer.py --ply splat.ply --language_feature langfeat.pth
+
+# scene switch with language features
+python run_viewer.py --folder_npy datasets/gaussian_world/preprocessed/scannetpp_v2_mcmc_3dgs/val/fb5a96b1a2 \
+--language_feature lang_feat --feature_type siglip --prune True --scene_list 09c1414f1b,3db0a1c8f3,fb5a96b1a2
 ```
 
 ### Language Feature architecture

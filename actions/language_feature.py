@@ -25,6 +25,10 @@ class CosineClassifier(nn.Module):
         img: (bs, emb_dim)
         concept: (n_class, emb_dim)
         """
+        # transfer to cpu for calculation
+        img = img.to(torch.float).cpu()
+        concept = concept.to(torch.float).cpu()
+
         img_norm = F.normalize(img, dim=-1)
         concept_norm = F.normalize(concept, dim=-1)
         pred = torch.matmul(img_norm, concept_norm.transpose(0, 1))
@@ -36,17 +40,19 @@ class CosineClassifier(nn.Module):
         
         print(pred, pred.min(), pred.max())
         pred = (pred - pred.min()) / (pred.max() - pred.min())
-        return pred
+        return pred.cuda()
 
 
 class LanguageFeature:
     def __init__(self, viewer, splatdata: SplatData, feature_type="siglip"):
         self.viewer = viewer
         self.server = viewer.server
+        viewer.language_feature_panel = self
+
         self.splats = splatdata
         self.language_feature = splatdata.get_data()['language_feature']
         self.num_class = 5
-        self.prune_rate = 1.0
+        self.prune_rate = 0.7
         self.masks = None
 
         self._feature_map = False
@@ -57,7 +63,6 @@ class LanguageFeature:
         self.labels = torch.zeros(self.language_feature.shape[0])
         self.cluster_centers = None
         self.class_id = -1
-        self.query_feature = None
         
         self.encoder_hidden_dims = [256, 128, 64, 32, 3]
         self.decoder_hidden_dims = [16, 32, 64, 128, 256, 256, 512]
@@ -67,26 +72,34 @@ class LanguageFeature:
         elif feature_type == "clip":
             self.config = OpenCLIPNetworkConfig()
             self.network = OpenCLIPNetwork(self.config)
-        else:
-            self.network = None
-            self.query_feature = torch.tensor(np.load(feature_type)[0]).to(splatdata.device)
         # self.config = SigLIPNetworkConfig()
         # self.network = SigLIPNetwork(self.config)
         # self.config = OpenCLIPNetworkConfig()
         # self.network = OpenCLIPNetwork(self.config)
         self.language_feature_large = splatdata.get_large()
+
+        with torch.no_grad():
+            self.concept_norm_cpu = (
+                F.normalize(                       # one-time L2 normalise
+                    self.language_feature_large.float(), dim=-1
+                )
+                .cpu().half().pin_memory()  # (N,768) already unit-norm
+            )
     
-        with self.server.gui.add_folder(label="Language Feature"):
-            self._feature_vis_button = self.server.gui.add_button("Feature Map")
+        with self.server.gui.add_folder(label="Language Feature Panel"):
+            self._feature_vis_button = self.server.gui.add_button("PCA Visualization")
             self._feature_vis_button.on_click(self._toggle_feature_map)
             
-            self._text_prompt = self.server.gui.add_text("Text Prompt", initial_value="chair")
+            self._text_prompt = self.server.gui.add_text("Query Text", initial_value="[please enter text]")
             self._text_prompt.on_update(self.update_language_feature)
-            self._text_prompt_rate = self.server.gui.add_text("Rate", initial_value="0.6")
+            self._text_prompt_rate = self.server.gui.add_text("Confidence Threshold", initial_value="0.75")
             self._text_prompt_rate.on_update(self.update_prune_rate)
+            
+            self._feature_vis_button = self.server.gui.add_button("Run Query")
+            self._feature_vis_button.on_click(self._toggle_query_map)
 
-            self._prune_based_on_text = self.server.gui.add_button("Prune based on text prompt")
-            self._prune_based_on_text.on_click(self.prune_based_on_text)
+            # self._prune_based_on_text = self.server.gui.add_button("Prune based on text prompt")
+            # self._prune_based_on_text.on_click(self.prune_based_on_text)
             
             self._feature_vis_button = self.server.gui.add_button("Normal Map")
             self._feature_vis_button.on_click(self._toggle_normal_map)
@@ -103,12 +116,73 @@ class LanguageFeature:
             # self._prune_based_on_classes_id = self.server.gui.add_button("Prune based on ClassID")
             # self._prune_based_on_classes_id.on_click(self.prune_based_on_class_ids)
 
+    # -------------------------------------------------------------- #
+    # Scene-switch hook
+    # -------------------------------------------------------------- #
+    def update_splats(self, splatdata: SplatData):
+        """
+        Re-point all tensors/buffers to the freshly-loaded scene.
+        """
+        self.splats = splatdata
+        self.language_feature       = splatdata.get_data()['language_feature']
+        self.language_feature_large = splatdata.get_large()
+
+        # rebuild pre-normalised copy
+        with torch.no_grad():
+            self.concept_norm_cpu = (
+                F.normalize(self.language_feature_large.float(), dim=-1)
+                .cpu().half().pin_memory()
+            )
+
+        # resize scratch buffers so they match the new point count
+        self.gs_scores = torch.zeros(
+            self.language_feature.shape[0],
+            device=self.language_feature.device,
+        )
+        self.masks = None
+
+    @staticmethod
+    @torch.no_grad()
+    def _cosine_scores(
+        img: torch.Tensor,        # (1, D)
+        concept: torch.Tensor,    # (N, D)  (may already be unit-norm)
+        *,                        # force kwargs below
+        concept_is_normalised=False,
+        scale: bool = False,
+        temp: float = 0.05,
+    ) -> torch.Tensor:            # (1, N)
+        img_norm = F.normalize(img, dim=-1)
+
+        if concept_is_normalised:
+            concept_norm = concept
+        else:
+            concept_norm = F.normalize(concept, dim=-1)
+
+        scores = img_norm @ concept_norm.T
+        if scale:
+            scores = scores / temp
+
+        scores = torch.sigmoid(scores)
+        s_min, s_max = scores.min(), scores.max()
+        if (s_max - s_min) > 1e-6:
+            scores = (scores - s_min) / (s_max - s_min)
+        else:
+            scores.fill_(0.0)
+        return scores
+
+    def _toggle_query_map(self, _):
+        self._feature_map = False
+        self._normal_map = False
+        self.update_splat_renderer()
+
     def _toggle_feature_map(self, _):
         self._feature_map = True
+        self._normal_map = False
         self.update_splat_renderer()
     
     def _toggle_normal_map(self, _):
         self._normal_map = True
+        self._feature_map = False
         self.update_splat_renderer()
 
     def _get_text_feature(self, text):
@@ -135,28 +209,40 @@ class LanguageFeature:
 
     #     self.classes_colors = torch.tensor(self.cluster_centers[self.labels]).to(self.language_feature.device)
     #     self.update_splat_renderer()
-    
-    def update_language_feature(self, text):
-        text = text.target.value
-        print(text)
-        if text == "all":
-            self.gs_scores = torch.zeros(self.language_feature.shape[0]).to(self.language_feature.device)
-        elif self.query_feature is not None:
-            new_feature = self.query_feature.to(torch.float)
-            # new_feature = self._get_text_feature(text).to(torch.float)
-            # gs_featuers = self.pca.inverse_transform(self.language_feature.detach().cpu().numpy())
-            Cos = CosineClassifier()
-            scores = Cos(new_feature, self.language_feature_large, scale=False).squeeze(0)
-            self.gs_scores = scores
-        else: 
-            new_feature = self._get_text_feature(text).to(torch.float)
-            # gs_featuers = self.pca.inverse_transform(self.language_feature.detach().cpu().numpy())
-
-            Cos = CosineClassifier()
-            scores = Cos(new_feature, self.language_feature_large, scale=False).squeeze(0)
-            self.gs_scores = scores
-        self.update_splat_renderer()
         
+    def update_language_feature(self, text_widget):
+        prompt = text_widget.target.value
+
+        if prompt == "all":
+            self.gs_scores = torch.zeros(
+                self.language_feature.shape[0],
+                device=self.language_feature.device,
+            )
+            return
+
+        # text → embedding → CPU fp16
+        img_feat = (
+            self._get_text_feature(prompt)
+            .float()
+            .cpu()
+            .half()
+        )
+
+        scores_cpu = self._cosine_scores(
+            img_feat.unsqueeze(0),           # (1,768)
+            self.concept_norm_cpu,           # (N,768) already unit-norm
+            concept_is_normalised=True,
+            scale=False,
+        ).squeeze()
+
+        # single async copy back to GPU (4 MB per million points)
+        self.gs_scores = scores_cpu.to(
+            self.language_feature.device,
+            non_blocking=True,
+        )
+
+        # self.update_splat_renderer()
+
     def prune_based_on_text(self, _):
         if self.gs_scores.sum() == 0:
             self.masks = None
@@ -176,11 +262,11 @@ class LanguageFeature:
         
     def update_prune_rate(self, text):
         self.prune_rate = float(text.target.value)
-        self.update_splat_renderer()
+        # self.update_splat_renderer()
 
-    def update_splat_renderer(self, device='cuda', backend='gsplat'):
+    def update_splat_renderer(self, _event=None,  *, device='cuda', backend='gsplat'):
         means, norms, quats, scales, opacities, colors, sh_degree, language_feature = self.splats.get_data().values()
-        # print(self._feature_map, self._normal_map)
+        print(self._feature_map, self._normal_map)
         if self.gs_scores.sum() != 0:
             new_colors = colors.clone()
             new_colors[self.gs_scores > self.prune_rate] = RGB2SH(torch.tensor([1, 0, 0]).to(device)).unsqueeze(0)

@@ -4,7 +4,6 @@ from utils.ply_to_ckpt import generate_gsplat_compatible_data
 import numpy as np
 import os
 from sklearn.decomposition import PCA
-from utils.color_shs import RGB2SH, SH2RGB
 
 class SplatData:
     def __init__(self, args=None):
@@ -25,45 +24,40 @@ class SplatData:
         device = self.device
 
         if args.ply is not None:
+            print(f"Loading GS data from {args.ply}")
             gaussian_params = generate_gsplat_compatible_data(args.ply, args)
             if args.language_feature:
                 means, norms, quats, scales, opacities, colors, sh_degree, language_feature, language_feature_large = gaussian_params
                 language_feature = torch.tensor(language_feature).to(device).to(torch.float32)
                 language_feature_large = torch.tensor(language_feature_large).to(device).to(torch.float32)
-                colors = SH2RGB(colors, sh_degree)
-                sh_degree = None
             else:
                 means, norms, quats, scales, opacities, colors, sh_degree = gaussian_params
+            
+            quats = quats / quats.norm(dim=-1, keepdim=True)
+            scales = torch.exp(scales)
+            opacities = torch.sigmoid(opacities).squeeze(-1)
+
             if args.prune:
                 # masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
-                mask = (scales < 0.5).all(dim=-1) & (opacities > 0.8).all(dim=-1)
-                print(f"There are {mask.sum()} valid splats out of {means.shape[0]}")
-            
+                masks = torch.ones(means.shape[0], dtype=torch.bool)
+                # mask = (scales < 0.5).all(dim=-1) & masks & (means[:,2] < 2.3) 
+                mask = masks & (means[:,2] < 2.3)
             else:
                 mask = torch.ones(means.shape[0], dtype=torch.bool)
-            
             means = means[mask]
             norms = norms[mask]
             quats = quats[mask]
             scales = scales[mask]
             opacities = opacities[mask]
             colors = colors[mask]
-            
             if args.language_feature:
                 language_feature = language_feature[mask]
                 language_feature_large = language_feature_large[mask]
-                
-            
-            quats = quats / quats.norm(dim=-1, keepdim=True)
-            scales = torch.exp(scales)
-            opacities = torch.sigmoid(opacities).squeeze(-1)
-        
-        
-        
-        if args.folder_npy is not None:
+         
+        elif args.folder_npy is not None:
             # Load data as before
                         # Optional: Prune entries where any dimension of scale is >= 1
-            
+            print(f"Loading GS data from folder {args.folder_npy}")
             means = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'coord.npy'))).float()
             if os.path.exists(os.path.join(args.folder_npy, 'normal.npy')):
                 norms = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'normal.npy'))).float()
@@ -73,13 +67,14 @@ class SplatData:
             scales = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'scale.npy'))).float()
             opacities = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'opacity.npy'))).float()
             colors = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'color.npy'))).float() / 255.0
+            colors = torch.clamp(colors, 0, 1)
             
             self.save_params_histograms(means, scales, colors, opacities)
             if args.prune:
-                masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
-                mask =  (scales < 0.5).all(dim=-1) & masks & (means[:, 2] < 2.0)
-                # 
-                print(f"There are {mask.sum()} valid splats out of {means.shape[0]}")
+                # masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
+                masks = torch.ones(means.shape[0], dtype=torch.bool)
+                # mask = (scales < 0.5).all(dim=-1) & masks & (means[:,2] < 2.3) 
+                mask = masks & (means[:,2] < 2.3)
             else:
                 mask = torch.ones(means.shape[0], dtype=torch.bool)
             sh_degree = None
@@ -90,18 +85,24 @@ class SplatData:
             scales = scales[mask]
             opacities = opacities[mask]
             colors = colors[mask]
+            print(f"number of gaussians after pruning: {means.shape[0]}")
             if args.language_feature:
                 if ".pth" in args.language_feature:
-                    language_feature_large = torch.load(os.path.join(args.folder_npy, args.language_feature))[mask].detach().to("cpu").numpy()
-                    print(language_feature_large.shape)
+                    result = torch.load(args.language_feature)
+                    if isinstance(result, tuple):
+                        language_feature_large = result[0]
+                    else:
+                        language_feature_large = result
+                    language_feature_large = result[mask].detach().to("cpu").numpy()
+                    print(f"language_feature_large.shape after pruning {language_feature_large.shape}")
                 else:
                     language_feature_large = np.load(os.path.join(args.folder_npy, args.language_feature)+'.npy')[mask.numpy()]
+                    print(f"loading language feature from {os.path.join(args.folder_npy, args.language_feature)+'.npy'} with mask.shape: {mask.shape}")
                 pca = PCA(n_components=3)
                 language_feature = pca.fit_transform(language_feature_large)
                 language_feature = torch.tensor((language_feature - language_feature.min(axis=0)) / (language_feature.max(axis=0) - language_feature.min(axis=0))).to(torch.float).to(device)
                 language_feature_large = torch.tensor(language_feature_large).to(torch.float).to(device)
 
-        # Get me the all params histogram and save to the data folder
         # self.save_params_histograms(means, scales, colors, opacities)
         means = means.to(device)
         quats = quats.to(device)

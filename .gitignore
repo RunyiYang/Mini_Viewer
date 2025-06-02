@@ -3,6 +3,7 @@ output_logs/
 *.ply
 *.error
 *.log
+*.tmp
 checkpoints/
 
 __pycache__/
@@ -14,5 +15,5 @@ results/
 data/
 figs/
 figs/*
-*.npy
-.tmp/
+*.json
+*.pyc

@@ -7,7 +7,7 @@ from sklearn.cluster import KMeans
 from plyfile import PlyData, PlyElement  # PlyFile import
 import numpy as np
 import pdb
-import os
+import os, copy
 import pdb
 import viser
 from core.splat import SplatData
@@ -15,6 +15,9 @@ from PIL import Image
 from typing import TYPE_CHECKING, Literal, Optional, Tuple, get_args
 import dataclasses
 import json
+
+from actions.base import BasicFeature
+from actions.language_feature import LanguageFeature
 
 RenderAction = Literal["rerender", "move", "static", "update"]
 @dataclasses.dataclass
@@ -28,6 +31,8 @@ class ViewerEditor(nerfview.Viewer):
                  splat_args, 
                  splat_data, 
                  *args, **kwargs):
+        self.scene_list = kwargs.pop("scene_list", None)
+        
         super().__init__(*args, **kwargs)
         self._editor = None
         self.splat_args = splat_args
@@ -62,14 +67,25 @@ class ViewerEditor(nerfview.Viewer):
         with self._rendering_folder:
             self._max_img_res_slider.remove()
             self._max_img_res_slider = self.server.gui.add_slider(
-                "Max Img Res", min=64, max=2048, step=1, initial_value=1920
+                "Image Res", min=64, max=2048, step=1, initial_value=1920
             )
             self._max_img_res_slider.on_update(self.rerender)
             self._fov_slider = self.server.gui.add_slider(
                 "FOV", min=10, max=120, step=1, initial_value=self.camera_state.fov if os.path.exists(".tmp/camera_state.json") else 45
             )
             self._fov_slider.on_update(self.rerender_K)
-           
+        
+        # ------------------------------------------------------------------
+        # Scene selector GUI
+        # ------------------------------------------------------------------
+        if self.scene_list:
+            with self.server.gui.add_folder(label="Scene Selection"):
+                self._scene_dropdown = self.server.gui.add_dropdown(
+                    "Scene",
+                    options=self.scene_list,
+                    initial_value=self._current_scene(),
+                )
+                self._scene_dropdown.on_update(self._on_scene_change)
             
         @self.server.on_client_connect
         def handle_client_connect(client: viser.ClientHandle):
@@ -84,6 +100,80 @@ class ViewerEditor(nerfview.Viewer):
                 R = self.camera_state.c2w[:3, :3]
                 client.camera.wxyz = rotation_matrix_to_quaternion(R)
 
+    # ------------------------------------------------------------------ #
+    # helpers for scene switching
+    # ------------------------------------------------------------------ #
+    def _current_scene(self) -> str:
+        """
+        Return the scene id (the last folder name) of the scene
+        currently loaded in `self.splat_args.folder_npy`.
+        """
+        if self.splat_args.folder_npy:
+            return os.path.basename(self.splat_args.folder_npy.rstrip("/"))
+        if self.splat_args.ply:  # fall-back for --ply mode
+            # note, we assume the format: --ply gaussian_world/scannetpp_v2_val_mcmc_3dgs/09c1414f1b/ckpts/point_cloud_30000.ply
+            return os.path.basename(os.path.dirname(os.path.dirname(self.splat_args.ply)))
+        return ""
+    
+    def _on_scene_change(self, widget):
+        new_scene = widget.target.value
+        if new_scene != self._current_scene():
+            self._switch_scene(new_scene)
+    
+    def _switch_scene(self, scene_id: str):
+        """
+        1.  constructs a new `folder_npy` by swapping the last path element
+        2.  reloads the Gaussian data
+        3.  hot-swaps all viewer state
+        """
+        if self.splat_args.folder_npy is None:
+            print("[Scene switch] Only supported when viewer was started "
+                "with --folder_npy.  Ignoring request.")
+            return
+    
+        base_dir = os.path.dirname(self.splat_args.folder_npy.rstrip("/"))
+        new_folder = os.path.join(base_dir, scene_id)
+        print(f"[Scene switch] Switching to {new_folder}...")
+    
+        if not os.path.isdir(new_folder):
+            print(f"[Scene switch] Folder not found: {new_folder}")
+            return
+    
+        # ------------------------------------------------------------------
+        # 1. build a *fresh* args object & load new splats
+        # ------------------------------------------------------------------
+        new_args = copy.deepcopy(self.splat_args)
+        new_args.folder_npy = new_folder
+    
+        new_splats = SplatData(args=new_args)
+        del self.splats, self.language_feature
+    
+        # ------------------------------------------------------------------
+        # 2. swap state inside the running viewer
+        # ------------------------------------------------------------------
+        self.splat_args = new_args
+        self.splats = new_splats
+    
+        # renderer
+        self.update_splat_renderer(splats=new_splats, update_inplace_memory=False)
+    
+        # # feature side-panels
+        # self.base_feature = BasicFeature(self, new_splats)
+        # self.language_feature = LanguageFeature(self, new_splats,
+        #                                         feature_type=self.splat_args.feature_type)
+
+        # tell the *existing* panels to look at the new scene
+        if hasattr(self, "base_feature_panel") and self.base_feature_panel is not None:
+            self.base_feature_panel.update_splats(new_splats)
+            print("[Scene switch] Updated base feature panel")
+        if hasattr(self, "language_feature_panel") and self.language_feature_panel is not None:
+            self.language_feature_panel.update_splats(new_splats)
+            print("[Scene switch] Updated language feature panel")
+    
+        # move camera to the new scene’s centre
+        centre = self.find_splat_central_point()
+
+        print("[Scene switch] Finished switching to scene:", scene_id)
 
     def find_splat_central_point(self) -> np.ndarray:
         """

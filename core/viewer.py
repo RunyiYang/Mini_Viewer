@@ -59,16 +59,16 @@ class ViewerEditor(nerfview.Viewer):
                 aspect=camera_state_dict["aspect"],
             )
   
-        with self._rendering_folder:
-            self._max_img_res_slider.remove()
-            self._max_img_res_slider = self.server.gui.add_slider(
-                "Max Img Res", min=64, max=2048, step=1, initial_value=1920
-            )
-            self._max_img_res_slider.on_update(self.rerender)
-            self._fov_slider = self.server.gui.add_slider(
-                "FOV", min=10, max=120, step=1, initial_value=self.camera_state.fov if os.path.exists(".tmp/camera_state.json") else 45
-            )
-            self._fov_slider.on_update(self.rerender_K)
+        # with self._rendering_folder:
+        self._max_img_res_slider.remove()
+            # self._max_img_res_slider = self.server.gui.add_slider(
+                # "Max Img Res", min=64, max=2048, step=1, initial_value=1920
+            # )
+            # self._max_img_res_slider.on_update(self.rerender)
+            # self._fov_slider = self.server.gui.add_slider(
+                # "FOV", min=10, max=120, step=1, initial_value=self.camera_state.fov if os.path.exists(".tmp/camera_state.json") else 45
+            # )
+            # self._fov_slider.on_update(self.rerender_K)
            
             
         @self.server.on_client_connect

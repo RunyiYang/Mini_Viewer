@@ -58,7 +58,7 @@ def main():
         mode="rendering",
     )
     
-    base = BasicFeature(viewer_editor, splats)
+    # base = BasicFeature(viewer_editor, splats)
     language_feature = LanguageFeature(viewer_editor, splats, feature_type=args.feature_type)
     
     server.scene.add_frame('origin')

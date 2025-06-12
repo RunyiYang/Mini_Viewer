@@ -77,19 +77,22 @@ class LanguageFeature:
         self.language_feature_large = splatdata.get_large()
     
         with self.server.gui.add_folder(label="Language Feature"):
-            self._feature_vis_button = self.server.gui.add_button("Feature Map")
-            self._feature_vis_button.on_click(self._toggle_feature_map)
+            # self._feature_vis_button = self.server.gui.add_button("Feature Map")
+            # self._feature_vis_button.on_click(self._toggle_feature_map)
             
-            self._text_prompt = self.server.gui.add_text("Text Prompt", initial_value="chair")
+            self._text_prompt = self.server.gui.add_text("Text Prompt", initial_value="[Try to Input Something]")
             self._text_prompt.on_update(self.update_language_feature)
-            self._text_prompt_rate = self.server.gui.add_text("Rate", initial_value="0.6")
-            self._text_prompt_rate.on_update(self.update_prune_rate)
-
-            self._prune_based_on_text = self.server.gui.add_button("Prune based on text prompt")
-            self._prune_based_on_text.on_click(self.prune_based_on_text)
             
-            self._feature_vis_button = self.server.gui.add_button("Normal Map")
-            self._feature_vis_button.on_click(self._toggle_normal_map)
+            self._show_query_feature = self.server.gui.add_button("Query")
+            self._show_query_feature.on_click(self.show_query_feature)
+            # self._text_prompt_rate = self.server.gui.add_text("Rate", initial_value="0.9")
+            # self._text_prompt_rate.on_update(self.update_prune_rate)
+
+            # self._prune_based_on_text = self.server.gui.add_button("Prune based on text prompt")
+            # self._prune_based_on_text.on_click(self.prune_based_on_text)
+            # 
+            # self._feature_vis_button = self.server.gui.add_button("Normal Map")
+            # self._feature_vis_button.on_click(self._toggle_normal_map)
             
             # self._hard_class_button = self.server.gui.add_button("Hard Label Class")
             # self._hard_class_button.on_click(self._get_hard_class)
@@ -136,6 +139,10 @@ class LanguageFeature:
     #     self.classes_colors = torch.tensor(self.cluster_centers[self.labels]).to(self.language_feature.device)
     #     self.update_splat_renderer()
     
+    def show_query_feature(self, _):
+        self.prune_rate = 0.8
+        self.update_splat_renderer()
+    
     def update_language_feature(self, text):
         text = text.target.value
         print(text)
@@ -155,7 +162,7 @@ class LanguageFeature:
             Cos = CosineClassifier()
             scores = Cos(new_feature, self.language_feature_large, scale=False).squeeze(0)
             self.gs_scores = scores
-        self.update_splat_renderer()
+        # self.update_splat_renderer()
         
     def prune_based_on_text(self, _):
         if self.gs_scores.sum() == 0:

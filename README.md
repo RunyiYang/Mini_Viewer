@@ -1,62 +1,146 @@
-# Ply Viewer
-Adapted codebase for loading Inria's ply files. To add features, you need an ckpt file to store all of the features of the ply file. 
+# Mini Viewer
+> Realtime Gaussian splat inspector with SigLIP/CLIP querying, bounding-box overlays, and a streamlined `viser` / `nerfview` workflow.
 
-## Install 
-Python 3.10 and CUDA 12.4 are successfully tested. The main issues is that flash-attn need CUDA>12.3.
+![Mini Viewer](docs/mini_viewer.png)
 
+Mini Viewer taps GSplat’s CUDA kernels through Nerfview’s ergonomics and renders them with Viser’s low-latency WebGL front-end. Load `.ply` scenes, NumPy blobs, or ckpt exports, drop in language features, and layer annotated bounding boxes via the in-repo `viser_bbox` toolkit.
+
+## Highlights
+- **Fresh viewer stack** – `viser 1.0.15`, `nerfview 0.1.3`, and `gsplat 1.5.3` with PyTorch CUDA 12.4 wheels.
+- **Language guidance** – SigLIP/CLIP embeddings recolor or prune splats in real time.
+- **One-click shaders** – RGB, depth, normals, screenshots with white background cleanup, and sticky camera poses.
+- **Bounding boxes** – Use SpatialLM-style scripts to draw labeled walls, doors, windows, and instance boxes right inside the same Viser server.
+- **Batteries included** – `viser_bbox` ships as an editable package inside this repo for custom scripts or tooling.
+
+## Environment Setup
+Tested on **Python 3.11**, **CUDA 12.4**, and NVIDIA 30/40/A-series data center GPUs. FlashAttention requires CUDA ≥ 12.3 if you enable it.
+
+```bash
+# create env (micromamba shown, conda/venv also fine)
+micromamba create -n viewer python=3.11 -y
+micromamba activate viewer
+
+# install the viewer stack
+pip install -r requirements.txt
+pip install -e ./viser_bbox
+
+# optional extras
+pip install flash-attn --no-build-isolation
 ```
-    micromamba create -n viewer python=3.10 -y
-    micromamba activate viewer 
-    pip install -r requirements.txt
-    pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu124
-    pip install git+https://github.com/huggingface/transformers@v4.49.0-SigLIP-2
-    pip install gsplat --index-url https://docs.gsplat.studio/whl/pt24cu124
-    pip install flash-attn --no-build-isolation
-```
 
-### CUDA Version
-CUDA toolkit 11.8 is recommended for running this renderer (check which you have with `nvcc --version` in terminal). In the INSAIT server, you could use these commands to init
+Useful CUDA exports (adapt to your toolchain):
 
-```
+```bash
 export CC=/usr/bin/gcc-11.5
 export CXX=/usr/bin/g++-11.5
 export LD=/usr/bin/g++-11.5
-export TORCH_CUDA_ARCH_LIST="8.6;8.9" # You need to checkout the compute capability of your device. In insait server, A6000 is 8.6, l4-24g is 8.9
-export LD_LIBRARY_PATH=/opt/modules/nvidia-cuda-12.4.0/lib64:$LD_LIBRARY_PATH
-export PATH=/opt/modules/nvidia-cuda-12.4.0/bin:$PATH
-export CPLUS_INCLUDE_PATH=/opt/modules/nvidia-cuda-12.4.0/include
+export TORCH_CUDA_ARCH_LIST="8.6;8.9"
+export CUDA_HOME=/usr/local/cuda-12.4
+export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
+export PATH=/usr/local/cuda-12.4/bin:$PATH
+export CPLUS_INCLUDE_PATH=/usr/local/cuda-12.4/include
 ```
 
+## Quick Start
+1. Prepare a Gaussian splat `.ply`, a set of NumPy arrays (`coord.npy`, `quat.npy`, `scale.npy`, `opacity.npy`, `color.npy`), or a ckpt convertible via `utils/pyl_to_ckpt.py`.
+2. (Optional) Pre-compute language features (SigLIP or CLIP embeddings) into a `.pth` or `.npy`.
+3. Launch the viewer:
 
-## Example run
+```bash
+python run_viewer.py \
+  --ply /path/to/scene.ply \
+  --language_feature /path/to/langfeat.pth \
+  --feature_type siglip \
+  --port 8080 \
+  --device cuda
 ```
-python run_viewer.py --ply splat.ply
+
+Then open `http://localhost:8080` to interact with the scene. The server persists camera states inside `.tmp/camera_state.json`, so refreshing keeps your view.
+
+### Example: ScanNet++ scene
+This repository includes ScanNet++ samples under `data/scannetpp/val`. To inspect `09c1414f1b`, run:
+
+```bash
+python run_viewer.py \
+  --folder_npy data/scannetpp/val/09c1414f1b \
+  --language_feature language_feature_dummy \
+  --device cuda \
+  --port 8080
 ```
-### Run with Language Features
+
+### CLI Arguments
+- `--ply`: Path to Inria-style Gaussian PLY (alternatively use `--folder_npy` to read NumPy blobs).
+- `--folder_npy`: Directory with `{coord,normal?,quat,scale,opacity,color}.npy`.
+- `--language_feature`: Torch or NumPy file containing `(N, D)` embeddings aligned with the splats.
+- `--feature_type`: `siglip`, `clip`, or path to a saved embedding vector.
+- `--prune`: Optional string flag to enable pruning heuristics baked into `SplatData`.
+- `--bbox_script`: SpatialLM-style script (see `docs/bboxes/demo.txt`) for drawing bounding boxes via `viser_bbox`.
+- `--device`: `cuda` or `cpu`.
+- `--port`: Viser server port (default `8080`).
+
+## Bounding Boxes with `viser_bbox`
+The `viser_bbox` subpackage ships reusable helpers and an API for drawing labeled wireframe boxes. Install it once (`pip install -e ./viser_bbox`) and pass a script to the viewer:
+
+```bash
+python run_viewer.py \
+  --folder_npy data/scannetpp/val/09c1414f1b \
+  --bbox_script docs/bboxes/demo.txt \
+  --device cuda
 ```
-python run_viewer.py --ply splat.ply --language_feature langfeat.pth
+
+Scripts follow the SpatialLM format:
+
+```
+wall0 = Wall(-2, -2, 0, 2, -2, 0, 3.0, 0.18)
+door0 = Door(wall0, 0.0, -2.0, 1.0, 0.9, 2.1)
+bbox0 = Bbox(Sofa, 0.8, 0.3, 0.7, 0.0, 1.5, 0.9, 1.0)
 ```
 
-### Language Feature architecture
-1. N is the num of points in splat.ply, language feature .pth file is in ((N, D), 0). To load the feature, this code uses `language_feature, _ = torch.load(pth_file)`
-2. D is 512 in default. 
-3. Do not try to use the viewer to read data across the nodes. !!! Very slow
+Under the hood we call `viser_bbox.add_script_bboxes`, so you can generate or reload scripts at runtime. For programmatic overlays (e.g., after an object selection) import `add_bounding_box` directly inside any action.
 
-If you want to add new stuff, check out `viewer.py` `ViewerEditor` class.
+## Language-Driven Editing
+Inside the **Language Feature** folder in the GUI you can:
+- Visualize the embedding space by sending colors straight to the renderer (`Feature Map`).
+- Toggle per-point normals (`Normal Map`) for quick sanity checks.
+- Type free-form text prompts (SigLIP/CLIP encoders are loaded dynamically) and recolor matches in red.
+- Prune splats by cosine score using the `Rate` field and `Prune based on text prompt` button.
 
-# TODO: Add your needs here and we could try to implement
-[x] - Object Query and Removal
+The module keeps both the PCA-compressed 3-channel preview (`language_feature`) and the full high-dimensional tensor (`language_feature_large`) so you can swap render modes without recomputing embeddings.
 
-[] - Object Selection
+### Query Gallery
+Below are snapshots generated from live language queries. The embeddings come from SigLIP and are executed through the viewer’s cosine-similarity filter.
 
-[] - Camera Placement: Placement and interpolate the path 
+![Query: vocation art](docs/query/query_vocation_art.png)
+![Query: toy add flavor](docs/query/query_toy_addflavor.png)
 
-## Acknowledgment 
+See `docs/query/text_query.mp4` for a short screen recording of the workflow.
 
-https://github.com/hangg7/nerfview - no license yet.
+## Working with Data
+- **PLY ingestion:** `utils/pyl_to_ckpt.py` converts Inria-format splats into GSplat-ready tensors. We expect vertex properties named `x,y,z`, `scale_*`, `rot_*`, `f_dc_*`, and `opacity`.
+- **NumPy ingestion:** drop `coord.npy`, `quat.npy`, `scale.npy`, `opacity.npy`, and `color.npy` (0–255) into a folder and pass it via `--folder_npy`. Optional `normal.npy` and language feature files are respected.
+- **Language features:** store embeddings as `.pth` (tuple `(tensor, metadata)`) or `.npy`. The loader masks them alongside the splats so pruning stays consistent.
+- **Snapshots:** press *Snapshot* in the GUI to write `./snapshot{idx}.png` with alpha handled automatically and the current camera stored under `.tmp/`.
 
+## Development Notes
+- GUI controls live in `actions/*.py`. Drop another folder via `server.gui.add_folder` to extend the toolkit (object selection, path planning, etc.).
+- `ViewerEditor` subclasses `nerfview.Viewer`, so any upstream camera improvements land here automatically when you bump the pip dependency.
+- `update_splat_renderer` can swap backends (e.g., `backend="torch"`) if you experiment with new renderers.
+- Do **not** stream datasets across nodes; latency tanks because GSplat expects local NVMe speed.
+
+## Roadmap
+- [x] Object query & removal
+- [x] Basic `viser_bbox` overlay support from the CLI
+- [ ] Object selection tooling
+- [ ] Camera placement and keyframe interpolation
+- [ ] In-viewer bbox authoring + editing tools
+
+## Acknowledgements
+- [Nerfview](https://github.com/hangg7/nerfview) for the original interactive scaffolding.
+- [Viser](https://github.com/nerfstudio-project/viser) for the lightweight WebGL frontend.
+- [GSplat](https://github.com/nerfstudio-project/gsplat) for CUDA splat rendering.
+- `viser_bbox` utilities were authored in this repo to streamline bounding-box overlays.
 ## Citations
-If you use this library or find the repo useful for your research, please consider citing:
+If you use Mini Viewer in research, please consider citing:
 
 ```
 @article{wu2023mars,

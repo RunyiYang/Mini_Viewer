@@ -35,7 +35,16 @@ class ViewerEditor(nerfview.Viewer):
         self.language_feature = splat_args.language_feature
         self.mode = "rgb"
         self.splats = splat_data
+        self.camera_state = nerfview.CameraState(
+            c2w=np.eye(4),
+            fov=np.deg2rad(45.0),
+            aspect=16.0 / 9.0,
+        )
+        self._base_render_fn = None
+        self._current_fov = None
         self.adjust_viewer()
+        # store base render fn initialized in parent
+        self._base_render_fn = self.render_fn
         if os.path.exists(".tmp/camera_state.json"):
             with open(".tmp/camera_state.json", "r") as f:
                 camera_state_dict = json.load(f)
@@ -50,23 +59,29 @@ class ViewerEditor(nerfview.Viewer):
         """
         Adjust the inherited viewer.
         """
+        slider_default = np.rad2deg(self.camera_state.fov)
         if os.path.exists(".tmp/camera_state.json"):
             with open(".tmp/camera_state.json", "r") as f:
                 camera_state_dict = json.load(f)
+            saved_fov = camera_state_dict["fov"]
             self.camera_state = nerfview.CameraState(
                 c2w=np.array(camera_state_dict["c2w"]),
-                fov=camera_state_dict["fov"] / np.pi * 180,
+                fov=saved_fov,
                 aspect=camera_state_dict["aspect"],
             )
+            slider_default = np.rad2deg(saved_fov)
+        slider_default = float(np.clip(slider_default, 10.0, 120.0))
   
         with self._rendering_folder:
-            self._max_img_res_slider.remove()
+            max_slider = getattr(self, "_max_img_res_slider", None)
+            if max_slider is not None:
+                max_slider.remove()
             self._max_img_res_slider = self.server.gui.add_slider(
                 "Max Img Res", min=64, max=2048, step=1, initial_value=1920
             )
             self._max_img_res_slider.on_update(self.rerender)
             self._fov_slider = self.server.gui.add_slider(
-                "FOV", min=10, max=120, step=1, initial_value=self.camera_state.fov if os.path.exists(".tmp/camera_state.json") else 45
+                "FOV", min=10, max=120, step=1, initial_value=slider_default
             )
             self._fov_slider.on_update(self.rerender_K)
            
@@ -147,6 +162,9 @@ class ViewerEditor(nerfview.Viewer):
 
 
         self.render_fn = render_fn
+        self._base_render_fn = render_fn
+        if self._current_fov is not None:
+            self.render_fn = functools.partial(self._base_render_fn, fov=self._current_fov)
 
 
         self.rerender(None) 
@@ -206,10 +224,11 @@ class ViewerEditor(nerfview.Viewer):
     
     def rerender_K(self, K):
         K = K.target.value / 180.0 * np.pi
-        render_fn = functools.partial(self.render_fn, fov=K)
         client = self.server.get_clients()[0]
         client.camera.fov = K
-        self.render_fn = render_fn
+        self._current_fov = K
+        if self._base_render_fn is not None:
+            self.render_fn = functools.partial(self._base_render_fn, fov=self._current_fov)
         self.rerender(None)
         
     def move(self, x):

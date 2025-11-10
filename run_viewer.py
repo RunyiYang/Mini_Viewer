@@ -1,14 +1,13 @@
 """A simple example to render a (large-scale) Gaussian Splats
 Found in gsplat/examples/simple_viewer.py
 
-Originally from nerfview
-```
+Originally from nerfview.
 """
-
 import argparse
 import time
 import torch
 import viser
+from pathlib import Path
 from core.renderer import viewer_render_fn
 from data_loader import load_data
 from core.viewer import ViewerEditor
@@ -26,7 +25,8 @@ def main():
     parser.add_argument("--device", type=str, default="cuda", help="cuda or cpu")
     parser.add_argument("--folder_npy", type=str, default=None, help="npy folder to load the data")
     parser.add_argument("--prune", type=str, help="Whether to prune the data")
-    parser.add_argument("--feature_type", type=str, default="siglip", help="clip or siglip")
+    parser.add_argument("--feature_type", type=str, default="siglip", help="clip, siglip, or path to .npy vector")
+    parser.add_argument("--bbox_script", type=str, help="SpatialLM-style script to overlay bounding boxes")
     args = parser.parse_args()
 
     torch.manual_seed(42)
@@ -49,6 +49,21 @@ def main():
                                                  )
 
     server = viser.ViserServer(port=args.port, verbose=False)
+
+    if args.bbox_script:
+        script_path = Path(args.bbox_script)
+        if script_path.is_file():
+            try:
+                from viser_bbox import add_script_bboxes
+            except ImportError as exc:
+                raise ImportError(
+                    "viser_bbox is not installed. Run `pip install -e ./viser_bbox` "
+                    "from the repository root."
+                ) from exc
+            add_script_bboxes(server, script_path.read_text(), path_prefix="/scene/bbox")
+            print(f"Loaded bounding boxes from {script_path}")
+        else:
+            print(f"[WARN] bbox script {script_path} not found; skipping.")
 
     viewer_editor = ViewerEditor(
         server=server,

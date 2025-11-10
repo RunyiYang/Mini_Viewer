@@ -1,10 +1,35 @@
-nerfview==0.0.3
-viser==0.2.23
-gsplat
-plyfile
+# requirements.txt
+# Python 3.10–3.12 recommended (for torch 2.4.x + CUDA 12.4)
+
+# Extra indexes for CUDA wheels (PyTorch cu124, gsplat pt24cu124)
+--extra-index-url https://download.pytorch.org/whl/cu124
+--extra-index-url https://docs.gsplat.studio/whl/pt24cu124
+
+# Core
+numpy==2.2.6            # keep <2.3.0 for CUDA OpenCV wheels
 opencv-python
-numpy==1.24 # anything but 2.0.0
+matplotlib
+scikit-learn
+setuptools
 ruff
-open-clip-torch
+
+# 3D / viz stack
 open3d
-setuptools==69.1
+plyfile
+splines
+nerfview
+viser
+
+# ML libs
+open-clip-torch
+torch==2.4.0
+torchvision==0.19.0
+
+# HF (pin to SigLIP-2 branch tag)
+transformers @ git+https://github.com/huggingface/transformers@v4.49.0-SigLIP-2
+
+# Gaussian splatting
+gsplat==1.5.3
+
+# Local bbox toolkit
+-e ./viser_bbox

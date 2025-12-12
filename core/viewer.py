@@ -45,6 +45,7 @@ class ViewerEditor(nerfview.Viewer):
         self.adjust_viewer()
         # store base render fn initialized in parent
         self._base_render_fn = self.render_fn
+        self._current_fov = self.camera_state.fov
         if os.path.exists(".tmp/camera_state.json"):
             with open(".tmp/camera_state.json", "r") as f:
                 camera_state_dict = json.load(f)
@@ -76,10 +77,22 @@ class ViewerEditor(nerfview.Viewer):
             max_slider = getattr(self, "_max_img_res_slider", None)
             if max_slider is not None:
                 max_slider.remove()
+            initial_res = int(getattr(self.render_tab_state, "viewer_res", 2048))
+            # clamp the initial resolution into slider range
+            initial_res = int(np.clip(initial_res, 64, 2048))
             self._max_img_res_slider = self.server.gui.add_slider(
-                "Max Img Res", min=64, max=2048, step=1, initial_value=1920
+                "Max Img Res", min=64, max=2048, step=1, initial_value=initial_res
             )
-            self._max_img_res_slider.on_update(self.rerender)
+            self.render_tab_state.viewer_res = initial_res
+
+            @self._max_img_res_slider.on_update
+            def _update_max_res(event: viser.GuiEvent) -> None:
+                self.render_tab_state.viewer_res = int(self._max_img_res_slider.value)
+                self.rerender(event)
+
+            # keep render tab handles consistent with base class expectations
+            if hasattr(self, "_rendering_tab_handles"):
+                self._rendering_tab_handles["viewer_res_slider"] = self._max_img_res_slider
             self._fov_slider = self.server.gui.add_slider(
                 "FOV", min=10, max=120, step=1, initial_value=slider_default
             )
@@ -222,14 +235,20 @@ class ViewerEditor(nerfview.Viewer):
         idx=idx+1
         return idx
     
-    def rerender_K(self, K):
-        K = K.target.value / 180.0 * np.pi
-        client = self.server.get_clients()[0]
-        client.camera.fov = K
-        self._current_fov = K
+    def rerender_K(self, event: viser.GuiEvent):
+        degrees = float(self._fov_slider.value)
+        fov_radians = np.deg2rad(degrees)
+        self._current_fov = fov_radians
+        clients = self.server.get_clients()
+        if not clients:
+            return
+        for client in clients.values():
+            client.camera.fov = fov_radians
+        # keep local camera state in sync for persistence
+        self.camera_state.fov = fov_radians
         if self._base_render_fn is not None:
-            self.render_fn = functools.partial(self._base_render_fn, fov=self._current_fov)
-        self.rerender(None)
+            self.render_fn = functools.partial(self._base_render_fn, fov=fov_radians)
+        self.rerender(event)
         
     def move(self, x):
         print(x)

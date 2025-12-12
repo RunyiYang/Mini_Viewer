@@ -73,11 +73,13 @@ class SplatData:
             scales = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'scale.npy'))).float()
             opacities = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'opacity.npy'))).float()
             colors = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'color.npy'))).float() / 255.0
-            
             self.save_params_histograms(means, scales, colors, opacities)
             if args.prune:
-                masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
-                mask =  (scales < 0.5).all(dim=-1) & masks & (means[:, 2] < 2.0)
+                try:
+                    masks = torch.from_numpy(np.load(os.path.join(args.folder_npy, 'valid_feat_mask.npy'))).bool()
+                except:
+                    masks = torch.ones(means.shape[0], dtype=torch.bool)
+                mask =  (scales < 0.3).all(dim=-1) & masks & (means[:, 2] < 2.0) & (opacities > 0.9)
                 # 
                 print(f"There are {mask.sum()} valid splats out of {means.shape[0]}")
             else:
@@ -91,7 +93,7 @@ class SplatData:
             opacities = opacities[mask]
             colors = colors[mask]
             if args.language_feature:
-                if ".pth" in args.language_feature:
+                if ".pth" or ".pt" in args.language_feature:
                     language_feature_large = torch.load(os.path.join(args.folder_npy, args.language_feature))[mask].detach().to("cpu").numpy()
                     print(language_feature_large.shape)
                 else:

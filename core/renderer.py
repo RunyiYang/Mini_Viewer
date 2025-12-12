@@ -1,4 +1,4 @@
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import nerfview
 import torch
@@ -34,12 +34,13 @@ def viewer_render_fn(camera_state: nerfview.CameraState,
                      device: str,
                      backend: str = "gsplat",
                      render_mode="rgb",
-                     fov=45.0 / 180 * 3.1415,
+                     fov: Optional[float] = None,
                      ):
     
     width, height = _resolve_img_dims(img_wh)
     c2w = camera_state.c2w
-    camera_state.fov = fov
+    if fov is not None:
+        camera_state.fov = fov
     K = camera_state.get_K((width, height))
 
     c2w = torch.from_numpy(c2w).float().to(device)

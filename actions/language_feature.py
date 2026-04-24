@@ -1,4 +1,12 @@
-"""Language feature visualization, query recoloring, pruning, and query bbox."""
+"""Feature visualization, query scoring, pruning, and query bbox export.
+
+Despite the historical filename, this action now supports both language and
+visual feature spaces:
+
+- SigLIP2 / SigLIP / CLIP text queries against aligned language features.
+- DINOv2 image-vector queries against aligned DINO features.
+- Precomputed query vectors for any feature type.
+"""
 
 from __future__ import annotations
 
@@ -13,27 +21,36 @@ import torch.nn.functional as F
 from core.splat import SplatData, load_feature_array
 from models.clip_query import (
     CosineClassifier,
+    DINOv2Network,
+    DINOv2NetworkConfig,
     OpenCLIPNetwork,
     OpenCLIPNetworkConfig,
     SigLIPNetwork,
     SigLIPNetworkConfig,
 )
 
+DINO_TYPES = {"dino", "dinov2", "dino2"}
+
 
 class LanguageFeature:
+    """GUI action for generic aligned-feature querying."""
+
     def __init__(
         self,
         viewer: Any,
         splatdata: SplatData,
         *,
-        feature_type: str = "siglip",
+        feature_type: str = "siglip2",
         query_feature_path: str | Path | None = None,
+        query_image_path: str | Path | None = None,
     ) -> None:
         self.viewer = viewer
         self.server = viewer.server
         self.splatdata = splatdata
         self.device = torch.device(getattr(viewer.splat_args, "device", "cuda"))
-        self.feature_type = feature_type.lower()
+        self.feature_type = self._normalize_feature_type(feature_type)
+        self.query_image_path = Path(query_image_path).expanduser() if query_image_path else None
+
         self.language_feature_preview = splatdata.get_data().get("language_feature")
         self.language_feature_large = splatdata.get_large()
         self.query_feature: torch.Tensor | None = None
@@ -51,14 +68,37 @@ class LanguageFeature:
         if query_feature_path is not None:
             self.query_feature = self._load_query_feature(query_feature_path)
 
-        if self.language_feature_large is not None and self.language_feature_large.numel() > 0:
-            self.network = self._maybe_create_network()
+        if self.language_feature_large is None or self.language_feature_large.numel() == 0:
+            print("[feature] No aligned feature tensor loaded; query controls are disabled.")
         else:
-            print("[language] No language feature tensor loaded; query controls are disabled.")
+            print(
+                f"[feature] Ready: type={self.feature_type}, "
+                f"features={tuple(self.language_feature_large.shape)}."
+            )
 
         self._setup_gui()
 
     # ------------------------------------------------------------------ setup
+    @staticmethod
+    def _normalize_feature_type(feature_type: str) -> str:
+        value = str(feature_type or "siglip2").strip().lower()
+        if value in {"dino2", "dino"}:
+            return "dinov2"
+        if value == "siglip":
+            return "siglip2"
+        return value
+
+    @property
+    def is_dino(self) -> bool:
+        return self.feature_type in DINO_TYPES
+
+    def _allow_model_on_cpu(self) -> bool:
+        args = self.viewer.splat_args
+        return bool(
+            getattr(args, "enable_feature_model_on_cpu", False)
+            or getattr(args, "enable_language_on_cpu", False)
+        )
+
     def _load_query_feature(self, path: str | Path) -> torch.Tensor:
         arr = np.asarray(load_feature_array(path), dtype=np.float32)
         if arr.ndim > 2:
@@ -67,41 +107,64 @@ class LanguageFeature:
             arr = arr[None]
         query = torch.from_numpy(arr).float().to(self.device)
         query = F.normalize(query, dim=-1, eps=1e-6)
-        print(f"[language] Loaded query feature {path} with shape {tuple(query.shape)}.")
+        print(f"[feature] Loaded query feature {path} with shape {tuple(query.shape)}.")
         return query
 
-    def _maybe_create_network(self) -> Any | None:
-        args = self.viewer.splat_args
-        if self.device.type != "cuda" and not getattr(args, "enable_language_on_cpu", False):
-            print("[language] CPU mode: text encoder is disabled. Use --query-feature or --enable-language-on-cpu.")
+    def _get_or_create_network(self) -> Any | None:
+        if self.network is not None:
+            return self.network
+        if self.device.type != "cuda" and not self._allow_model_on_cpu():
+            print(
+                "[feature] CPU mode: model-backed query encoders are disabled. "
+                "Use --query-feature, CUDA, or --enable-feature-model-on-cpu."
+            )
             return None
+
+        args = self.viewer.splat_args
+        cache_dir = getattr(args, "hf_cache_dir", None)
         try:
             if self.feature_type == "clip":
-                return OpenCLIPNetwork(OpenCLIPNetworkConfig(), device=str(self.device))
-
-            model_name = getattr(args, "siglip_model", None) or SigLIPNetworkConfig.model_name
-            cache_dir = getattr(args, "hf_cache_dir", None)
-            return SigLIPNetwork(
-                SigLIPNetworkConfig(
-                    model_name=str(model_name),
-                    cache_dir=str(cache_dir) if cache_dir is not None else None,
-                ),
-                device=str(self.device),
-            )
+                self.network = OpenCLIPNetwork(OpenCLIPNetworkConfig(), device=str(self.device))
+            elif self.is_dino:
+                model_name = getattr(args, "dino_model", None) or DINOv2NetworkConfig.model_name
+                self.network = DINOv2Network(
+                    DINOv2NetworkConfig(
+                        model_name=str(model_name),
+                        cache_dir=str(cache_dir) if cache_dir is not None else None,
+                    ),
+                    device=str(self.device),
+                )
+            else:
+                model_name = getattr(args, "siglip_model", None) or SigLIPNetworkConfig.model_name
+                self.network = SigLIPNetwork(
+                    SigLIPNetworkConfig(
+                        model_name=str(model_name),
+                        cache_dir=str(cache_dir) if cache_dir is not None else None,
+                    ),
+                    device=str(self.device),
+                )
         except Exception as exc:
-            print(f"[language] Could not initialize {self.feature_type} text encoder: {exc}")
-            return None
+            print(f"[feature] Could not initialize {self.feature_type} query encoder: {exc}")
+            self.network = None
+        return self.network
 
     def _setup_gui(self) -> None:
         try:
             gui = self.server.gui
-            with gui.add_folder("Language Feature"):
+            initial_prompt = str(self.query_image_path) if self.query_image_path is not None else ""
+            with gui.add_folder("Feature Query"):
                 feature_button = gui.add_button("Feature Map")
                 reset_button = gui.add_button("Reset RGB")
                 normal_button = gui.add_button("Normal Map")
-                prompt = gui.add_text("Text Prompt", initial_value="")
-                threshold = gui.add_slider("Threshold", min=0.0, max=1.0, step=0.01, initial_value=self.prune_rate)
-                query_button = gui.add_button("Query Text / Feature")
+                prompt = gui.add_text("Text prompt / DINO image path", initial_value=initial_prompt)
+                threshold = gui.add_slider(
+                    "Threshold",
+                    min=0.0,
+                    max=1.0,
+                    step=0.01,
+                    initial_value=self.prune_rate,
+                )
+                query_button = gui.add_button("Query text / image / feature")
                 prune_button = gui.add_button("Prune by Query")
                 show_bbox = gui.add_checkbox("Show query bbox", initial_value=self.show_query_bbox)
                 export_bbox = gui.add_button("Export query bbox")
@@ -148,7 +211,7 @@ class LanguageFeature:
                     self.update_language_feature(str(prompt.value).strip())
                 if self.gs_scores is not None:
                     self.current_mask = self.gs_scores >= self.prune_rate
-                    print(f"[language] Pruned view to {int(self.current_mask.sum())}/{len(self.current_mask)} splats.")
+                    print(f"[feature] Pruned view to {int(self.current_mask.sum())}/{len(self.current_mask)} splats.")
                     self.update_splat_renderer()
                     self._update_query_bbox()
 
@@ -161,37 +224,59 @@ class LanguageFeature:
             def _export(_: Any) -> None:
                 path = self.export_query_bbox()
                 if path is not None:
-                    print(f"[language] Exported query bbox to {path}")
+                    print(f"[feature] Exported query bbox to {path}")
         except Exception as exc:
-            print(f"[language] GUI setup warning: {exc}")
+            print(f"[feature] GUI setup warning: {exc}")
 
     # ------------------------------------------------------------------ scoring
-    def _encode_query(self, text: str) -> torch.Tensor | None:
+    def _resolve_image_query_path(self, prompt: str) -> Path | None:
+        candidate_text = prompt.strip()
+        if not candidate_text and self.query_image_path is not None:
+            return self.query_image_path
+        if not candidate_text:
+            return None
+        candidate = Path(candidate_text).expanduser()
+        if candidate.exists():
+            return candidate
+        return None
+
+    def _encode_query(self, prompt: str) -> torch.Tensor | None:
         if self.query_feature is not None:
             return self.query_feature
-        if not text:
-            print("[language] Empty query. Enter text or pass --query-feature.")
-            return None
-        if self.network is None:
-            print("[language] No text encoder available. Install language extras, use CUDA, or pass --query-feature.")
-            return None
-        return self.network.encode_text(text).to(self.device)
+        if self.is_dino:
+            image_path = self._resolve_image_query_path(prompt)
+            if image_path is None:
+                print("[feature] DINO/DINOv2 queries require an image path or --query-feature vector.")
+                return None
+            network = self._get_or_create_network()
+            if network is None:
+                return None
+            return network.encode_image(image_path).to(self.device)
 
-    def update_language_feature(self, text: str) -> None:
+        if not prompt:
+            print("[feature] Empty query. Enter text or pass --query-feature.")
+            return None
+        network = self._get_or_create_network()
+        if network is None:
+            print("[feature] No text encoder available. Use CUDA, --query-feature, or --enable-feature-model-on-cpu.")
+            return None
+        return network.encode_text(prompt).to(self.device)
+
+    def update_language_feature(self, prompt: str) -> None:
         if self.language_feature_large is None or self.language_feature_large.numel() == 0:
-            print("[language] No loaded language features to query.")
+            print("[feature] No loaded aligned features to query.")
             return
-        query = self._encode_query(text)
+        query = self._encode_query(prompt)
         if query is None:
             return
         features = self.language_feature_large.to(self.device)
         if query.shape[-1] != features.shape[-1]:
-            print(f"[language] Query dim {query.shape[-1]} != feature dim {features.shape[-1]}; cannot score.")
+            print(f"[feature] Query dim {query.shape[-1]} != feature dim {features.shape[-1]}; cannot score.")
             return
         raw_scores = CosineClassifier.score(features, query)
         minv, maxv = raw_scores.min(), raw_scores.max()
         self.gs_scores = ((raw_scores - minv) / (maxv - minv + 1e-6)).clamp(0.0, 1.0)
-        self.last_prompt = text
+        self.last_prompt = prompt
         self._update_query_bbox()
         self.update_splat_renderer()
 
@@ -201,7 +286,11 @@ class LanguageFeature:
         out = {key: value for key, value in data.items() if key != "language_feature"}
         colors = data["colors"].clone()
 
-        if self.feature_map_enabled and self.language_feature_preview is not None and self.language_feature_preview.numel() > 0:
+        if (
+            self.feature_map_enabled
+            and self.language_feature_preview is not None
+            and self.language_feature_preview.numel() > 0
+        ):
             colors = self.language_feature_preview.to(self.device).clone()
         elif self.normal_map_enabled:
             colors = ((data["normals"] + 1.0) * 0.5).clamp(0.0, 1.0)
@@ -251,14 +340,14 @@ class LanguageFeature:
         lo = means.amin(dim=0).numpy()
         hi = means.amax(dim=0).numpy()
         size = hi - lo
-        # Keep zero-volume selections visible.
         pad = np.maximum(size * 0.02, 1e-3)
         lo = lo - pad
         hi = hi + pad
         center = (lo + hi) * 0.5
         size = hi - lo
         self._last_bbox = {
-            "prompt": self.last_prompt,
+            "feature_type": self.feature_type,
+            "query": self.last_prompt,
             "threshold": float(self.prune_rate),
             "count": int(mask.sum().item()),
             "min": lo.tolist(),
@@ -285,7 +374,20 @@ class LanguageFeature:
             dtype=np.float32,
         )
         edges = np.array(
-            [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]],
+            [
+                [0, 1],
+                [1, 2],
+                [2, 3],
+                [3, 0],
+                [4, 5],
+                [5, 6],
+                [6, 7],
+                [7, 4],
+                [0, 4],
+                [1, 5],
+                [2, 6],
+                [3, 7],
+            ],
             dtype=np.int64,
         )
         segments = corners[edges]
@@ -298,7 +400,7 @@ class LanguageFeature:
             )
             self._bbox_handles.append(handle)
         except Exception as exc:
-            print(f"[language] Could not draw query bbox line segments: {exc}")
+            print(f"[feature] Could not draw query bbox line segments: {exc}")
             return
         try:
             label = self.server.scene.add_label(
@@ -313,7 +415,7 @@ class LanguageFeature:
     def export_query_bbox(self, output_path: str | Path = "outputs/query_bbox.json") -> Path | None:
         self._update_query_bbox()
         if self._last_bbox is None:
-            print("[language] No bbox to export. Run a query and enable/show query bbox first.")
+            print("[feature] No bbox to export. Run a query and enable/show query bbox first.")
             return None
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)

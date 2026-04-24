@@ -1,20 +1,52 @@
-output_logs/
-*.pth
-*.ply
-*.error
-*.log
-checkpoints/
-
+# Python
 __pycache__/
 */__pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Local environments
+.venv/
+venv/
+.env
+.env.*
+
+# Mini Viewer runtime outputs
+.tmp/
+outputs/
+output_logs/
+snapshot*.png
+*.log
+*.error
+
+# Large local data/artifacts
+checkpoints/
+data/
+results/
+figs/
 teaser/
 datastats/
-results/
-data/
-figs/
-figs/*
+*.ply
 *.npy
-.tmp/
-data/
-data/*
+*.npz
+*.pth
+*.pt
+*.mp4
+
+# Patch/apply backups
+.mini_viewer_*_backup_*/
+mini_viewer_patch/
+mini_viewer_runtime_hotfix_*/
+mini_viewer_clean_runtime_*/
+mini_viewer_project_cleanup_*/
+mini_viewer_metadata_cleanup_*/
+mini_viewer_unified_project_files_*/
+mini_viewer_release_*/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

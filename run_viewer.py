@@ -72,14 +72,40 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Folder containing coord/quat/scale/opacity/color .npy files.",
     )
 
-    parser.add_argument("--language-feature", "--language_feature", dest="language_feature", type=Path, default=None)
+    parser.add_argument(
+        "--feature-file",
+        "--feature",
+        dest="feature_file",
+        type=Path,
+        default=None,
+        help="Generic aligned feature tensor (.npy/.npz/.pt/.pth). Works for SigLIP/CLIP/DINO features.",
+    )
+    parser.add_argument(
+        "--language-feature",
+        "--language_feature",
+        dest="language_feature",
+        type=Path,
+        default=None,
+        help="Backward-compatible alias for --feature-file.",
+    )
+    parser.add_argument(
+        "--dino-feature",
+        "--dino_feature",
+        dest="dino_feature",
+        type=Path,
+        default=None,
+        help="Backward-compatible visual-feature alias for --feature-file.",
+    )
     parser.add_argument(
         "--feature-type",
         "--feature_type",
         dest="feature_type",
         default="siglip2",
-        choices=["siglip2", "siglip", "clip"],
-        help="Text encoder used when querying language features. siglip/siglip2 use SigLIP2 by default.",
+        choices=["siglip2", "siglip", "clip", "dino", "dinov2", "dino2"],
+        help=(
+            "Query encoder/feature family. siglip/siglip2/clip use text queries; "
+            "dino/dinov2 use image-path queries or --query-feature vectors."
+        ),
     )
     parser.add_argument(
         "--query-feature",
@@ -87,7 +113,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="query_feature",
         type=Path,
         default=None,
-        help="Optional .npy/.pt/.pth text/query embedding. If provided, no text encoder is required.",
+        help="Optional .npy/.pt/.pth query embedding. If provided, no query encoder is required.",
+    )
+    parser.add_argument(
+        "--query-image",
+        "--query_image",
+        dest="query_image",
+        type=Path,
+        default=None,
+        help="Optional image path used as the initial DINO/DINOv2 query.",
     )
     parser.add_argument(
         "--siglip-model",
@@ -97,17 +131,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Hugging Face model id for SigLIP/SigLIP2 text queries.",
     )
     parser.add_argument(
+        "--dino-model",
+        "--dino_model",
+        dest="dino_model",
+        default="facebook/dinov2-base",
+        help="Hugging Face model id for DINO/DINOv2 image queries.",
+    )
+    parser.add_argument(
         "--hf-cache-dir",
         "--hf_cache_dir",
         dest="hf_cache_dir",
         type=Path,
         default=None,
-        help="Optional Hugging Face cache directory for downloaded SigLIP2 weights.",
+        help="Optional Hugging Face cache directory for downloaded query encoder weights.",
     )
     parser.add_argument(
+        "--enable-feature-model-on-cpu",
+        "--enable_feature_model_on_cpu",
         "--enable-language-on-cpu",
+        dest="enable_feature_model_on_cpu",
         action="store_true",
-        help="Allow text encoders on CPU. This is slow but useful for debugging.",
+        help="Allow text/image query encoders on CPU. This is slow but useful for debugging.",
     )
 
     parser.add_argument("--bbox-script", "--bbox_script", dest="bbox_script", type=Path, default=None)
@@ -197,6 +241,16 @@ def main() -> None:
     args.device = _resolve_device(args.device)
     args.backend = _resolve_backend(args.backend, args.device)
     args.prune = _boolish(args.prune) if args.prune is not None else False
+    feature_path = None
+    for candidate in (args.feature_file, args.language_feature, args.dino_feature):
+        if candidate is not None:
+            feature_path = candidate
+            break
+    args.feature_file = feature_path
+    # SplatData still uses this historical attribute internally.
+    args.language_feature = feature_path
+    # Backward-compatible attribute expected by older action code.
+    args.enable_language_on_cpu = bool(args.enable_feature_model_on_cpu)
 
     server = viser.ViserServer(host=args.host, port=args.port, verbose=False)
     _draw_bbox_script(server, args.bbox_script)
@@ -234,6 +288,7 @@ def main() -> None:
         splatdata,
         feature_type=args.feature_type,
         query_feature_path=args.query_feature,
+        query_image_path=args.query_image,
     )
     CameraPathFeature(viewer, splatdata, args)
 

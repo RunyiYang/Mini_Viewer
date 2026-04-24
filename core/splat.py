@@ -3,7 +3,7 @@
 Supported scene inputs:
 - Inria/3DGS style .ply files.
 - NumPy folders with coord/quat/scale/opacity/color arrays.
-- Optional language feature .npy/.pt/.pth files aligned to splats.
+- Optional aligned feature .npy/.pt/.pth files aligned to splats.
 """
 
 from __future__ import annotations
@@ -46,6 +46,16 @@ FEATURE_KEYS = (
     "clip_features",
     "siglip",
     "siglip_features",
+    "dino",
+    "dinov2",
+    "dino_feature",
+    "dino_features",
+    "dinov2_feature",
+    "dinov2_features",
+    "image_feature",
+    "image_features",
+    "visual_feature",
+    "visual_features",
 )
 
 
@@ -120,7 +130,7 @@ def resolve_feature_path(scene_path: Path | None, language_feature: Path | None)
         candidate = scene_path / path
         if candidate.exists():
             return candidate
-    raise FileNotFoundError(f"Language feature file not found: {language_feature}")
+    raise FileNotFoundError(f"Feature file not found: {language_feature}")
 
 
 def _find_array_file(folder: Path, names: Iterable[str]) -> Path | None:
@@ -264,7 +274,7 @@ class SplatData:
         # to CPU without first touching CUDA tensors.
         self._data_cpu = {key: value.detach().cpu().contiguous() for key, value in tensors.items()}
         self._data = {key: value.to(self.device) for key, value in self._data_cpu.items()}
-        self._load_language_features(original_n_before_masks, valid_mask)
+        self._load_aligned_features(original_n_before_masks, valid_mask)
 
     def _load_valid_feature_mask(self) -> np.ndarray | None:
         folder = getattr(self.args, "folder_npy", None)
@@ -388,7 +398,7 @@ class SplatData:
         print(f"[splat] Loaded NumPy folder {folder} ({n:,} splats).")
         return tensors, np.arange(n, dtype=np.int64)
 
-    def _load_language_features(self, original_n_before_masks: int, valid_mask: np.ndarray | None) -> None:
+    def _load_aligned_features(self, original_n_before_masks: int, valid_mask: np.ndarray | None) -> None:
         scene_path = getattr(self.args, "folder_npy", None) or getattr(self.args, "ply", None)
         feature_path = resolve_feature_path(Path(scene_path) if scene_path else None, getattr(self.args, "language_feature", None))
         if feature_path is None:
@@ -421,7 +431,7 @@ class SplatData:
 
         if features is None:
             print(
-                f"[language] Ignoring {feature_path}: feature count {raw.shape[0]} does not align with splat count {len(final_ids)}."
+                f"[feature] Ignoring {feature_path}: feature count {raw.shape[0]} does not align with splat count {len(final_ids)}."
             )
             empty_cpu = torch.empty((len(self), 0), dtype=torch.float32)
             self._data_cpu["language_feature"] = empty_cpu
@@ -436,7 +446,7 @@ class SplatData:
         self._language_feature_large = self._language_feature_large_cpu.to(self.device)
         self._data_cpu["language_feature"] = preview_cpu
         self._data["language_feature"] = preview_cpu.to(self.device)
-        print(f"[language] Loaded {feature_path} with shape {tuple(full.shape)}.")
+        print(f"[feature] Loaded aligned feature {feature_path} with shape {tuple(full.shape)}.")
 
     def get_data(self, device: str | torch.device | None = None) -> dict[str, torch.Tensor]:
         if device is not None and str(device).startswith("cpu"):

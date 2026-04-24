@@ -1,51 +1,67 @@
 # Mini Viewer
 
-Realtime Gaussian splat viewer for `.ply` and NumPy splat folders, with CUDA/CPU rendering, SigLIP2/CLIP language-feature querying, queried-feature bounding boxes, and Nerfstudio-style camera-path export/video rendering.
+Realtime Gaussian-splat inspector with CUDA/CPU rendering, SigLIP2/CLIP text querying, DINOv2 image-feature querying, queried-feature bounding boxes, and Nerfstudio-style camera-path video export.
 
-Mini Viewer is designed for large 3DGS scenes where the normal path is CUDA + `gsplat`, but the same environment can still run a CPU/torch fallback for debugging, servers without a visible GPU, or rerender fallback when CUDA rasterization fails.
+Mini Viewer loads Gaussian scenes from `.ply` files or NumPy folders, overlays bbox scripts through `viser_bbox`, visualizes aligned feature tensors, queries those tensors with text, image prompts, or precomputed vectors, exports query bounding boxes, and renders camera paths to MP4.
 
 ![Mini Viewer](docs/mini_viewer.png)
 
-## What is included
+## Release feature set
 
-- Load Gaussian splats from `.ply` or NumPy folders.
-- Load language features from `.npy`, `.npz`, `.pt`, or `.pth`.
-- Query language features with SigLIP2 by default: `google/siglip2-so400m-patch16-512`.
-- Visualize feature maps, RGB, depth, and normals.
-- Toggle queried-feature bounding boxes and export them as JSON.
-- Add camera keyframes in the viewer and export a Nerfstudio-style `camera_path.json`.
-- Render camera-path videos from the GUI or with a headless script.
-- Use CUDA/`gsplat` when available, with optional CPU rerender fallback.
+- **Scene loading:** Inria/3DGS-style `.ply` files or NumPy folders with `coord.npy`, `quat.npy`, `scale.npy`, `opacity.npy`, and `color.npy`.
+- **CUDA renderer:** `gsplat` backend with PyTorch CUDA 12.4 wheels.
+- **CPU renderer:** torch/numpy fallback backend for CPU-only runs, forced CPU rerendering, or failed CUDA rerenders.
+- **Feature tensors:** aligned `.npy`, `.npz`, `.pt`, or `.pth` tensors for SigLIP, CLIP, DINO, or custom embeddings.
+- **SigLIP2 text queries:** default text encoder is `google/siglip2-so400m-patch16-512`.
+- **CLIP text queries:** optional OpenCLIP path through `--feature-type clip`.
+- **DINOv2 image queries:** default visual encoder is `facebook/dinov2-base`; queries use an image path or a precomputed vector.
+- **Feature maps:** PCA/preview recoloring of high-dimensional feature tensors.
+- **Query bbox:** threshold the query score, toggle bbox visibility, and export `outputs/query_bbox.json`.
+- **Camera paths:** place cameras, export a Nerfstudio-style `camera_path.json`, and render MP4 video.
+- **Release checks:** static validation script, pytest smoke test, GitHub Actions CI, `.gitattributes`, and `.gitignore`.
 
-## Repository dependency files
-
-The repo should keep only these project-level dependency/config files:
+## Repository layout
 
 ```text
-README.md
-requirements.txt
-env.yml
-pyproject.toml
+README.md                   Main setup and usage guide.
+env.yml                     Full Conda environment: CUDA 12.4, gsplat, viewer, query encoders.
+requirements.txt            Pip equivalent of env.yml.
+pyproject.toml              Project metadata, console script, Ruff, and pytest config.
+CHANGELOG.md                Release notes.
+RELEASE_CHECKLIST.md         Manual release checklist.
+run_viewer.py               Main viewer CLI.
+core/splat.py               PLY/NumPy/aligned-feature loading.
+core/renderer.py            CUDA/torch/CPU-fallback rendering.
+core/viewer.py              nerfview/viser integration.
+actions/language_feature.py Generic SigLIP/CLIP/DINO/query-vector feature UI.
+actions/camera_path.py      Camera placement, export, and GUI video rendering.
+models/clip_query.py        Lazy SigLIP2, CLIP, and DINOv2 query encoders.
+scripts/download_siglip2.py SigLIP2 cache helper.
+scripts/download_dino.py    DINOv2 cache helper.
+scripts/render_camera_path.py Headless camera-path renderer.
+scripts/smoke_test_loaders.py Data-loader smoke test.
+scripts/validate_release.py Static release validator.
 ```
 
-Older split files such as `requirements-cpu.txt`, `requirements-cuda124.txt`, `requirements-language.txt`, and `environment-mini-viewer-*.yml` are intentionally replaced by the single full-stack environment below.
+Old split files such as `requirements-common.txt`, `requirements-cpu.txt`, `requirements-cuda124.txt`, `requirements-language.txt`, `environment-mini-viewer-*.yml`, and `README_patch.md` are obsolete.
 
-## Environment setup
+## Install from scratch with Conda
 
-Use Python 3.10. The full environment installs a CUDA 12.4 PyTorch build, `gsplat`, the viewer stack, and language-query dependencies. It can still run CPU rendering via `--device cpu --backend torch`.
-
-From the repo root:
+Use this path for a full CUDA-capable workstation/server environment. The same environment can still run CPU mode.
 
 ```bash
+git clone git@github.com:RunyiYang/Mini_Viewer.git
+cd Mini_Viewer
+
 conda env remove -n mini-viewer -y || true
 conda env create -f env.yml
 conda activate mini-viewer
 
-# The bbox helper is an editable local package in this repo.
+pip install -e .
 pip install -e ./viser_bbox
 ```
 
-Verify the install:
+Validate the installation:
 
 ```bash
 python - <<'PY'
@@ -63,34 +79,104 @@ except Exception as exc:
 try:
     import transformers
     import open_clip
-    print('language deps: OK')
+    print('query encoder deps: OK')
 except Exception as exc:
-    print('language deps failed:', repr(exc))
+    print('query encoder deps failed:', repr(exc))
 PY
 ```
 
-### Optional pip-only install
+## Pip-only install
 
-`requirements.txt` contains the same full-stack pip dependency set used by `env.yml`. Use it only when you are not creating the Conda environment:
+Conda is preferred because it installs `ffmpeg`, but a pip-only setup is available:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip install -e ./viser_bbox
+python -m pip install -r requirements.txt
+python -m pip install -e .
+python -m pip install -e ./viser_bbox
 ```
 
-## Quick start
+## CPU-only hosts
 
-### CUDA + gsplat, normal path
+`env.yml` and `requirements.txt` use the CUDA 12.4 PyTorch wheel as the superset setup. CPU rendering still works from that environment:
 
 ```bash
 python run_viewer.py \
-  --folder-npy /path/to/scene_folder \
-  --language-feature /path/to/features.npy \
-  --device cuda \
-  --backend gsplat \
+  --ply /path/to/scene.ply \
+  --device cpu \
+  --backend torch
+```
+
+On a machine where the CUDA `gsplat` wheel cannot be installed, remove or comment out this line in `requirements.txt` or `env.yml`:
+
+```text
+gsplat==1.5.3+pt24cu124
+```
+
+Then run only with:
+
+```bash
+--device cpu --backend torch
+```
+
+## Input data format
+
+### NumPy scene folder
+
+Required files:
+
+```text
+coord.npy      float array, shape (N, 3)
+quat.npy       float array, shape (N, 4)
+scale.npy      float array, shape (N, 3)
+opacity.npy    float array, shape (N,) or (N, 1)
+color.npy      RGB/color array, float [0,1] or uint8 [0,255]
+```
+
+Optional files:
+
+```text
+normal.npy
+valid_feat_mask.npy
+features.npy / features.npz / features.pt / features.pth
+```
+
+Use `--npy-scale-log` if NumPy `scale.npy` values are log-scales and should be exponentiated.
+
+### PLY file
+
+The PLY loader expects Inria/3DGS-style vertex properties such as:
+
+```text
+x, y, z
+scale_0, scale_1, scale_2
+rot_0, rot_1, rot_2, rot_3
+f_dc_0, f_dc_1, f_dc_2
+opacity
+```
+
+### Aligned feature files
+
+Use `--feature-file`, `--language-feature`, or `--dino-feature` to load an aligned feature tensor. The loader accepts `.npy`, `.npz`, `.pt`, and `.pth` and will search common keys such as:
+
+```text
+features, feature, embeddings, language_feature, clip_features,
+siglip_features, dino_features, dinov2_features, image_features, visual_features
+```
+
+The first dimension must match the loaded splat count, the original splat count before masks/downsampling, or the `valid_feat_mask.npy` count.
+
+## Run the viewer
+
+### PLY scene, automatic backend
+
+```bash
+python run_viewer.py \
+  --ply /path/to/scene.ply \
+  --device auto \
+  --backend auto \
   --port 8080
 ```
 
@@ -100,187 +186,135 @@ Open:
 http://localhost:8080
 ```
 
-### PLY input
+### NumPy scene with CUDA rendering
 
 ```bash
 python run_viewer.py \
-  --ply /path/to/scene.ply \
+  --folder-npy /path/to/scene_folder \
+  --device cuda \
+  --backend gsplat \
+  --port 8080
+```
+
+### SigLIP2 text-query features
+
+```bash
+python run_viewer.py \
+  --folder-npy /work/runyi_yang/Worldcept/example/scannetpp_v2_mcmc_3dgs_lang_large/val/09c1414f1b \
+  --feature-file /path/to/siglip2_features.npy \
+  --feature-type siglip2 \
+  --siglip-model google/siglip2-so400m-patch16-512 \
+  --hf-cache-dir /work/runyi_yang/hf_cache \
   --device cuda \
   --backend gsplat
 ```
 
-### CPU rendering from the same environment
+The backward-compatible alias also works:
+
+```bash
+--language-feature /path/to/siglip2_features.npy
+```
+
+### DINOv2 image-query features
+
+DINOv2 is visual-only: query it with an image path or a precomputed query vector, not text.
 
 ```bash
 python run_viewer.py \
   --folder-npy /path/to/scene_folder \
+  --dino-feature /path/to/dino_features.npy \
+  --feature-type dinov2 \
+  --query-image /path/to/query_crop.png \
+  --dino-model facebook/dinov2-base \
+  --hf-cache-dir /work/runyi_yang/hf_cache \
+  --device cuda \
+  --backend gsplat
+```
+
+Inside the viewer, paste another image path into **Text prompt / DINO image path** and press **Query text / image / feature**.
+
+### Query with a precomputed vector
+
+This works for SigLIP2, CLIP, DINOv2, or any custom aligned feature space:
+
+```bash
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --feature-file /path/to/point_features.npy \
+  --query-feature /path/to/query_vector.npy \
+  --feature-type dinov2 \
   --device cpu \
   --backend torch
 ```
 
-### Force CPU rerender fallback while still loading CUDA/language features
-
-Useful when `gsplat` fails during interaction, or while debugging feature maps on a large scene:
+### Force CPU rerendering while keeping CUDA data loading
 
 ```bash
 python run_viewer.py \
   --folder-npy /path/to/scene_folder \
-  --language-feature /path/to/features.npy \
+  --feature-file /path/to/features.npy \
   --device cuda \
   --backend gsplat \
   --force-cpu-render \
   --cpu-fallback-splats 80000
 ```
 
-## Data formats
+### Disable automatic CPU fallback
 
-### NumPy folder
-
-Pass the folder through `--folder-npy`. The loader expects:
-
-```text
-coord.npy      # required, N x 3 xyz
-quat.npy       # required, N x 4 quaternion
-scale.npy      # required, N x 3 scale
-opacity.npy    # required, N or N x 1 opacity
-color.npy      # required, N x 3 RGB, usually 0-255 or 0-1
-normal.npy     # optional, N x 3 normals
-```
-
-If your NumPy scale values are log-scales, add:
-
-```bash
---npy-scale-log
-```
-
-### PLY
-
-Pass an Inria/3DGS-style `.ply` through `--ply`. The loader handles standard Gaussian PLY properties such as positions, opacity, scales, rotations, and color/SH fields.
-
-### Language features
-
-Language features should be aligned with the splats and have shape approximately:
-
-```text
-N x D
-```
-
-Supported formats:
-
-```text
-.npy
-.npz
-.pt
-.pth
-```
-
-Run with:
+CPU fallback is enabled by default. Disable it only when CUDA errors should fail loudly:
 
 ```bash
 python run_viewer.py \
   --folder-npy /path/to/scene_folder \
-  --language-feature /path/to/language_features.pth \
-  --feature-type siglip2 \
-  --device cuda
+  --device cuda \
+  --backend gsplat \
+  --no-cpu-render-fallback
 ```
 
-If you already have a precomputed text/query embedding, use it directly and avoid loading a text encoder:
+## Query model cache helpers
 
-```bash
-python run_viewer.py \
-  --folder-npy /path/to/scene_folder \
-  --language-feature /path/to/point_features.npy \
-  --query-feature /path/to/query_vector.npy \
-  --device cpu \
-  --backend torch
-```
-
-## SigLIP2 query encoder
-
-The default text-query model is:
-
-```text
-google/siglip2-so400m-patch16-512
-```
-
-The viewer downloads it lazily on first text query. To pre-download the model once:
+Pre-download SigLIP2:
 
 ```bash
 python scripts/download_siglip2.py \
-  --cache-dir /path/to/hf_cache
+  --cache-dir /work/runyi_yang/hf_cache
 ```
 
-Then run with:
+Pre-download DINOv2:
 
 ```bash
-python run_viewer.py \
-  --folder-npy /path/to/scene_folder \
-  --language-feature /path/to/features.npy \
-  --hf-cache-dir /path/to/hf_cache \
-  --device cuda
+python scripts/download_dino.py \
+  --model facebook/dinov2-base \
+  --cache-dir /work/runyi_yang/hf_cache
 ```
 
-CPU text encoding is disabled by default because it is slow. To explicitly allow it:
+CPU model-backed queries are disabled by default because they are slow. Enable them only for debugging:
 
 ```bash
---enable-language-on-cpu
+--enable-feature-model-on-cpu
 ```
 
-## Viewer controls
+## Feature Query GUI
 
-The GUI exposes folders for basic rendering, language features, and camera paths.
+The **Feature Query** folder exposes:
 
-### Basic rendering
+1. **Feature Map**: PCA/preview recoloring of loaded aligned features.
+2. **Reset RGB**: return to RGB splat colors.
+3. **Normal Map**: visualize normals.
+4. **Text prompt / DINO image path**: text for SigLIP/CLIP, image path for DINOv2.
+5. **Threshold**: score cutoff for recolor/prune/bbox.
+6. **Query text / image / feature**: run cosine query.
+7. **Prune by Query**: show only selected splats.
+8. **Show query bbox**: draw bbox over selected splats.
+9. **Export query bbox**: write `outputs/query_bbox.json`.
 
-- RGB rendering.
-- Depth rendering.
-- Normal rendering.
-- Snapshot export.
-- CPU fallback toggles for rerender failures.
-- Force CPU renderer toggle.
-- CPU fallback splat-count control.
+## Camera paths and video export
 
-### Language feature querying
+In the viewer:
 
-- Show feature map.
-- Query by text using SigLIP2/CLIP.
-- Query by precomputed embedding.
-- Set score/rate threshold.
-- Recolor matched splats.
-- Toggle queried-feature bbox.
-- Export queried-feature bbox JSON.
-
-A missing language feature file produces:
-
-```text
-[language] No language feature tensor loaded; query controls are disabled.
-```
-
-That only means `--language-feature` is missing or points to the wrong file.
-
-### Queried-feature bbox
-
-Workflow:
-
-1. Start the viewer with `--language-feature`.
-2. Enter a text query or load `--query-feature`.
-3. Adjust the threshold/rate.
-4. Toggle **Show query bbox**.
-5. Press **Export query bbox**.
-
-Default output:
-
-```text
-outputs/query_bbox.json
-```
-
-## Camera path and video rendering
-
-### In the viewer
-
-1. Move the camera to a desired pose.
+1. Move the camera to the desired pose.
 2. Press **Add Camera**.
-3. Repeat for more keyframes.
+3. Repeat for all keyframes.
 4. Press **Export Cameras**.
 5. Press **Render Video**.
 
@@ -291,18 +325,18 @@ outputs/camera_path.json
 outputs/render.mp4
 ```
 
-### Headless render
+Headless render command:
 
 ```bash
 python scripts/render_camera_path.py \
-  --folder-npy /path/to/scene_folder \
+  --ply /path/to/scene.ply \
   --camera-path outputs/camera_path.json \
   --output outputs/render.mp4 \
   --device cuda \
   --backend gsplat
 ```
 
-CPU fallback video render:
+CPU fallback video rendering:
 
 ```bash
 python scripts/render_camera_path.py \
@@ -313,153 +347,172 @@ python scripts/render_camera_path.py \
   --backend torch
 ```
 
-## Useful CLI arguments
+## Static bbox scripts with `viser_bbox`
+
+Install once:
+
+```bash
+pip install -e ./viser_bbox
+```
+
+Run with a bbox script:
+
+```bash
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --bbox-script docs/bboxes/demo.txt \
+  --device cuda
+```
+
+Example script syntax:
 
 ```text
---ply PATH                         Load a .ply scene.
---folder-npy PATH                  Load a NumPy splat folder.
---language-feature PATH            Load aligned language features.
---query-feature PATH               Load a precomputed query embedding.
---feature-type {siglip2,siglip,clip}
+wall0 = Wall(-2, -2, 0, 2, -2, 0, 3.0, 0.18)
+door0 = Door(wall0, 0.0, -2.0, 1.0, 0.9, 2.1)
+bbox0 = Bbox(Sofa, 0.8, 0.3, 0.7, 0.0, 1.5, 0.9, 1.0)
+```
+
+## Useful CLI options
+
+```text
+--ply PATH                         Load a Gaussian PLY.
+--folder-npy PATH                  Load NumPy splat arrays.
+--feature-file PATH                Load aligned feature tensor.
+--language-feature PATH            Backward-compatible alias for --feature-file.
+--dino-feature PATH                Backward-compatible DINO alias for --feature-file.
+--feature-type {siglip2,siglip,clip,dino,dinov2,dino2}
+--query-feature PATH               Load precomputed query embedding.
+--query-image PATH                 Initial DINO/DINOv2 image query.
 --siglip-model MODEL_ID            Default: google/siglip2-so400m-patch16-512.
---hf-cache-dir PATH                Hugging Face model cache directory.
---enable-language-on-cpu           Allow text encoder on CPU.
---bbox-script PATH                 Draw SpatialLM-style bbox script through viser_bbox.
---device {auto,cuda,cpu}           Default: auto.
---backend {auto,gsplat,torch}      Default: auto.
---max-splats N                     Optional global splat downsample while loading.
---max-cpu-splats N                 CPU renderer splat cap. Default: 180000.
---cpu-render-fallback              Retry failed CUDA rerenders on CPU. Enabled by default.
---no-cpu-render-fallback           Disable automatic CPU retry.
---cpu-fallback-splats N            CPU retry cap. Default: 80000.
---force-cpu-render                 Force all viewer rerenders through CPU torch renderer.
---npy-scale-log                    Treat NumPy scale arrays as log-scales.
---camera-path PATH                 Camera-path JSON path. Default: outputs/camera_path.json.
---video-output PATH                GUI video output path. Default: outputs/render.mp4.
---render-width N                   GUI video width. Default: 1280.
---render-height N                  GUI video height. Default: 720.
---render-fps N                     GUI video FPS. Default: 30.
---render-seconds SEC              GUI video duration. Default: 5.0.
---port PORT                        Viser port. Default: 8080.
+--dino-model MODEL_ID              Default: facebook/dinov2-base.
+--hf-cache-dir PATH                Hugging Face cache path.
+--device {auto,cuda,cpu}
+--backend {auto,gsplat,torch}
+--cpu-render-fallback              Retry failed CUDA frames on CPU; enabled by default.
+--no-cpu-render-fallback           Disable automatic CPU fallback.
+--cpu-fallback-splats INT          Downsample cap for CPU fallback frames.
+--force-cpu-render                 Render all viewer frames through CPU torch backend.
+--max-cpu-splats INT               CPU renderer downsample cap.
+--enable-feature-model-on-cpu      Allow SigLIP/CLIP/DINO encoders on CPU.
+--camera-path PATH                 Camera-path JSON output/input path.
+--video-output PATH                GUI video output path.
+--render-width INT
+--render-height INT
+--render-fps INT
+--render-seconds FLOAT
+--bbox-script PATH
+--npy-scale-log
+--port INT
 ```
 
-Both hyphen and underscore aliases are accepted for the patched options, for example `--folder-npy` and `--folder_npy`.
-
-## ScanNet++ style example
-
-```bash
-python run_viewer.py \
-  --folder-npy /work/runyi_yang/Worldcept/example/scannetpp_v2_mcmc_3dgs_lang_large/val/09c1414f1b \
-  --language-feature /path/to/features.npy \
-  --hf-cache-dir /work/runyi_yang/hf_cache \
-  --device cuda \
-  --backend gsplat \
-  --cpu-render-fallback \
-  --cpu-fallback-splats 80000 \
-  --port 8080
-```
-
-If interaction is unstable on this very large scene, force CPU rerendering:
-
-```bash
-python run_viewer.py \
-  --folder-npy /work/runyi_yang/Worldcept/example/scannetpp_v2_mcmc_3dgs_lang_large/val/09c1414f1b \
-  --language-feature /path/to/features.npy \
-  --device cuda \
-  --backend gsplat \
-  --force-cpu-render \
-  --cpu-fallback-splats 80000
-```
+Both hyphen and underscore aliases are accepted for patched options, for example `--folder-npy` and `--folder_npy`.
 
 ## Troubleshooting
 
-### `No language feature tensor loaded`
+### `No aligned feature tensor loaded; query controls are disabled.`
 
 Pass a valid feature file:
 
 ```bash
---language-feature /path/to/features.npy
+--feature-file /path/to/features.npy
 ```
 
-To find candidates:
+The feature tensor must align with the loaded splats after masks/downsampling.
+
+### DINO query says it needs an image path
+
+DINOv2 is not a text model. Use one of these:
 
 ```bash
-find /path/to/scene_folder \
-  -maxdepth 2 \
-  \( -name '*.npy' -o -name '*.npz' -o -name '*.pth' -o -name '*.pt' \) \
-  | sort
+--query-image /path/to/query_crop.png
 ```
 
-### `gsplat` render error or CUDA fallback message
+or:
 
-Keep automatic fallback enabled:
+```bash
+--query-feature /path/to/query_vector.npy
+```
+
+### Query dimension mismatch
+
+The query vector and loaded point features must share the same final dimension. For example, `facebook/dinov2-base` image queries are normally 768-D, so aligned DINO splat features should also be 768-D.
+
+### CUDA rendering fails or falls back repeatedly
+
+Use the CPU fallback controls:
 
 ```bash
 --cpu-render-fallback --cpu-fallback-splats 80000
 ```
 
-Or force CPU rendering:
+or force CPU rendering:
 
 ```bash
---force-cpu-render
+--force-cpu-render --cpu-fallback-splats 80000
 ```
 
-### CPU-only machine
+### Hugging Face model download is slow or unavailable
 
-Use the same environment if it installs successfully, then run:
+Pre-download the model while online, then run with `--hf-cache-dir /path/to/hf_cache`.
+
+## Development and release checks
+
+Run the static release check:
 
 ```bash
-python run_viewer.py --ply /path/to/scene.ply --device cpu --backend torch
+python scripts/validate_release.py
 ```
 
-If the `gsplat` wheel is unavailable on a CPU-only platform, remove or comment this line from `requirements.txt` and `env.yml`:
-
-```text
-gsplat==1.5.3+pt24cu124
-```
-
-Then recreate the env and use `--device cpu --backend torch`.
-
-### Hugging Face download/cache issues
-
-Set an explicit cache directory:
+Run tests:
 
 ```bash
-export HF_HOME=/path/to/hf_cache
-python scripts/download_siglip2.py --cache-dir /path/to/hf_cache
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest
 ```
 
-Then pass:
+Run syntax-focused Ruff checks:
 
 ```bash
---hf-cache-dir /path/to/hf_cache
+ruff check . --select E9,F63,F7,F82
 ```
 
-## Development
-
-- Main entry point: `run_viewer.py`.
-- Splat loading and CPU master copy: `core/splat.py`.
-- CUDA/torch/CPU-fallback rendering: `core/renderer.py`.
-- Viser/Nerfview integration: `core/viewer.py`.
-- Basic controls: `actions/base.py`.
-- Language query and bbox controls: `actions/language_feature.py`.
-- Camera-path controls: `actions/camera_path.py`.
-- SigLIP2/CLIP text embedding: `models/clip_query.py`.
-- Headless camera-path rendering: `scripts/render_camera_path.py`.
-- SigLIP2 pre-download helper: `scripts/download_siglip2.py`.
-
-Run a syntax check:
+Before publishing a GitHub release, run at least one CPU command and one CUDA command on a real scene:
 
 ```bash
-python -m compileall run_viewer.py actions core models scripts utils
+python scripts/smoke_test_loaders.py \
+  --folder-npy /path/to/scene_folder \
+  --feature-file /path/to/features.npy \
+  --device cpu
+
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --feature-file /path/to/features.npy \
+  --feature-type siglip2 \
+  --device cuda \
+  --backend gsplat
 ```
+
+Also test one DINO path if DINO features are part of the release:
+
+```bash
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --dino-feature /path/to/dino_features.npy \
+  --feature-type dinov2 \
+  --query-image /path/to/query_crop.png \
+  --device cuda \
+  --backend gsplat
+```
+
+## License
+
+Add an explicit `LICENSE` file before publishing a public release. The project owner should choose the license; this patch does not assign legal terms automatically.
 
 ## Acknowledgements
 
-- Nerfview for interactive viewer scaffolding.
-- Viser for the WebGL frontend.
-- GSplat for CUDA Gaussian rasterization.
-- The in-repo `viser_bbox` utilities for bounding-box overlays.
+- Nerfview for the interactive rendering scaffold.
+- Viser for the WebGL viewer frontend.
+- GSplat for CUDA Gaussian splat rasterization.
+- Hugging Face Transformers for SigLIP2 and DINOv2 model loading.
 
 ## Citations
 
@@ -467,10 +520,10 @@ If you use Mini Viewer in research, please consider citing:
 
 ```bibtex
 @article{wu2023mars,
-  author    = {Wu, Zirui and Liu, Tianyu and Luo, Liyi and Zhong, Zhide and Chen, Jianteng and Xiao, Hongmin and Hou, Chao and Lou, Haozhe and Chen, Yuantao and Yang, Runyi and Huang, Yuxin and Ye, Xiaoyu and Yan, Zike and Shi, Yongliang and Liao, Yiyi and Zhao, Hao},
-  title     = {MARS: An Instance-aware, Modular and Realistic Simulator for Autonomous Driving},
-  journal   = {CICAI},
-  year      = {2023}
+  author  = {Wu, Zirui and Liu, Tianyu and Luo, Liyi and Zhong, Zhide and Chen, Jianteng and Xiao, Hongmin and Hou, Chao and Lou, Haozhe and Chen, Yuantao and Yang, Runyi and Huang, Yuxin and Ye, Xiaoyu and Yan, Zike and Shi, Yongliang and Liao, Yiyi and Zhao, Hao},
+  title   = {MARS: An Instance-aware, Modular and Realistic Simulator for Autonomous Driving},
+  journal = {CICAI},
+  year    = {2023}
 }
 
 @misc{yang2024spectrally,

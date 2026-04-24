@@ -1,3 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-viewer"
+version = "0.3.0"
+description = "Realtime Gaussian splat viewer with CPU/CUDA rendering, SigLIP2/CLIP/DINOv2 querying, bbox export, and camera-path video rendering."
+readme = "README.md"
+requires-python = ">=3.10,<3.12"
+authors = [{ name = "Mini Viewer contributors" }]
+
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "ruff>=0.6",
+  "tomli>=2.0",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+mini-viewer = "run_viewer:main"
+
+[tool.setuptools]
+py-modules = ["run_viewer", "data_loader"]
+
+[tool.setuptools.packages.find]
+include = ["actions*", "core*", "models*", "utils*"]
+exclude = ["data*", "docs*", "outputs*", "scripts*", "tests*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -6,15 +38,9 @@ target-version = "py310"
 select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = ["E501"]
 
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto"
+[tool.ruff.lint.isort]
+known-first-party = ["actions", "core", "models", "utils", "viser_bbox"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["tests"]
-filterwarnings = [
-  "ignore::DeprecationWarning",
-]
+addopts = "-ra"

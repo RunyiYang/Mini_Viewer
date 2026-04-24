@@ -1,7 +1,0 @@
-open-clip-torch>=2.24
-transformers>=4.49,<5
-sentencepiece>=0.2
-protobuf>=4.25
-safetensors>=0.4
-huggingface-hub>=0.24
-hf-xet>=1.0

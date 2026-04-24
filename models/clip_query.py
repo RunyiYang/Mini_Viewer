@@ -1,212 +1,174 @@
+"""Lazy language-query helpers.
+
+Nothing here imports heavyweight CLIP/SigLIP dependencies at module import time, so
+CPU-only viewer usage remains lightweight.
+
+The default SigLIP encoder is SigLIP2 So400m patch16 512:
+``google/siglip2-so400m-patch16-512``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from dataclasses import dataclass, field
-from typing import Tuple, Type
-import torchvision
-from transformers import AutoProcessor, AutoModel, AutoTokenizer
-try:
-    import open_clip
-except ImportError:
-    raise ImportError("open_clip is not installed, install it with `pip install open-clip-torch`")
 
 
-class CosineClassifier(nn.Module):
-    def __init__(self, temp=0.05):
-        super(CosineClassifier, self).__init__()
-        self.temp = temp
+class CosineClassifier:
+    """Cosine scorer for language features and query embeddings."""
 
-    def forward(self, img, concept, scale=True):
-        """
-        img: (bs, emb_dim)
-        concept: (n_class, emb_dim)
-        """
-        img_norm = F.normalize(img, dim=-1)
-        concept_norm = F.normalize(concept, dim=-1)
-        pred = torch.matmul(img_norm, concept_norm.transpose(0, 1))
-        if scale:
-            pred = pred / self.temp
-        return pred
+    @staticmethod
+    def score(features: torch.Tensor, query: torch.Tensor) -> torch.Tensor:
+        if query.ndim == 1:
+            query = query[None]
+        features = F.normalize(features.float(), dim=-1, eps=1e-6)
+        query = F.normalize(query.float(), dim=-1, eps=1e-6)
+        scores = features @ query.T
+        return scores.max(dim=-1).values
 
 
 @dataclass
 class OpenCLIPNetworkConfig:
-    _target: Type = field(default_factory=lambda: OpenCLIPNetwork)
-    clip_model_type: str = "ViT-B-16"
-    clip_model_pretrained: str = "laion2b_s34b_b88k"
-    clip_n_dims: int = 512
-    negatives: Tuple[str] = ("object", "things", "stuff", "texture")
-    positives: Tuple[str] = ("",)
-
-
-class OpenCLIPNetwork(nn.Module):
-    def __init__(self, config: OpenCLIPNetworkConfig):
-        super().__init__()
-        self.config = config
-        self.process = torchvision.transforms.Compose(
-            [
-                torchvision.transforms.Resize((224, 224)),
-                torchvision.transforms.Normalize(
-                    mean=[0.48145466, 0.4578275, 0.40821073],
-                    std=[0.26862954, 0.26130258, 0.27577711],
-                ),
-            ]
-        )
-        model, _, _ = open_clip.create_model_and_transforms(
-            self.config.clip_model_type,  # e.g., ViT-B-16
-            pretrained=self.config.clip_model_pretrained,  # e.g., laion2b_s34b_b88k
-            precision="fp16",
-        )
-        model.eval()
-        self.tokenizer = open_clip.get_tokenizer(self.config.clip_model_type)
-        self.model = model.to("cuda")
-        self.clip_n_dims = self.config.clip_n_dims
-
-        self.positives = self.config.positives
-        self.negatives = self.config.negatives
-        with torch.no_grad():
-            tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.positives]).to("cuda")
-            self.pos_embeds = model.encode_text(tok_phrases)
-            tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.negatives]).to("cuda")
-            self.neg_embeds = model.encode_text(tok_phrases)
-        self.pos_embeds /= self.pos_embeds.norm(dim=-1, keepdim=True)
-        self.neg_embeds /= self.neg_embeds.norm(dim=-1, keepdim=True)
-
-        assert (
-            self.pos_embeds.shape[1] == self.neg_embeds.shape[1]
-        ), "Positive and negative embeddings must have the same dimensionality"
-        assert (
-            self.pos_embeds.shape[1] == self.clip_n_dims
-        ), "Embedding dimensionality must match the model dimensionality"
-
-    @property
-    def name(self) -> str:
-        return "openclip_{}_{}".format(self.config.clip_model_type, self.config.clip_model_pretrained)
-
-    @property
-    def embedding_dim(self) -> int:
-        return self.config.clip_n_dims
-
-    def gui_cb(self, element):
-        self.set_positives(element.value.split(";"))
-
-    def set_positives(self, text_list):
-        self.positives = text_list
-        with torch.no_grad():
-            tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.positives]).to("cuda")
-            self.pos_embeds = self.model.encode_text(tok_phrases)
-        self.pos_embeds /= self.pos_embeds.norm(dim=-1, keepdim=True)
-
-    def get_relevancy(self, embed: torch.Tensor, positive_id: int) -> torch.Tensor:
-        phrases_embeds = torch.cat([self.pos_embeds, self.neg_embeds], dim=0)
-        p = phrases_embeds.to(embed.dtype)  # phrases x 512
-        output = torch.mm(embed, p.T)  # rays x phrases
-        positive_vals = output[..., positive_id: positive_id + 1]  # rays x 1
-        negative_vals = output[..., len(self.positives):]  # rays x N_phrase
-        repeated_pos = positive_vals.repeat(1, len(self.negatives))  # rays x N_phrase
-
-        sims = torch.stack((repeated_pos, negative_vals), dim=-1)  # rays x N-phrase x 2
-        softmax = torch.softmax(10 * sims, dim=-1)  # rays x n-phrase x 2
-        best_id = softmax[..., 0].argmin(dim=1)  # rays x 2
-        return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.negatives), 2))[:, 0, :]
-
-    def encode_image(self, input):
-        processed_input = self.process(input).half()
-        return self.model.encode_image(processed_input)
-    
-    def encode_text(self, text):
-        """
-        Encode text using OpenCLIP.
-        This method tokenizes the input text, encodes it with the model,
-        and then normalizes the text feature.
-        """
-        tokenized_text = self.tokenizer(text).to("cuda")
-        with torch.no_grad():
-            text_feature = self.model.encode_text(tokenized_text)
-        text_feature = text_feature / text_feature.norm(dim=-1, keepdim=True)
-        return text_feature
-    
-def get_text_feature(network, text):
-    # Tokenize and encode the text
-    tokenized_text = network.tokenizer(text).to("cuda")
-    with torch.no_grad():
-        text_feature = network.model.encode_text(tokenized_text)
-    
-    # Normalize the text feature
-    text_feature /= text_feature.norm(dim=-1, keepdim=True)
-    
-    return text_feature
+    model_name: str = "ViT-L-14"
+    pretrained: str = "openai"
 
 
 @dataclass
 class SigLIPNetworkConfig:
-    _target: Type = field(default_factory=lambda: SigLIPNetwork)
-    # Use the SigLIP model ID from Hugging Face
-    clip_model_pretrained: str = "google/siglip2-base-patch16-512"
-    # SigLIP default embedding dimension for the vision encoder is 768.
-    clip_n_dims: int = 768
-    negatives: Tuple[str] = ("object", "things", "stuff", "texture")
-    positives: Tuple[str] = ("",)
+    # User-requested default: SigLIP2-so400m-p16-512.
+    # Hugging Face checkpoint id uses "patch16" instead of "p16".
+    model_name: str = "google/siglip2-so400m-patch16-512"
+    max_length: int = 64
+    cache_dir: str | Path | None = None
+    local_files_only: bool = False
+    trust_remote_code: bool = False
+    attn_implementation: str | None = "sdpa"
 
 
+class OpenCLIPNetwork:
+    def __init__(self, config: OpenCLIPNetworkConfig | None = None, device: str = "cuda") -> None:
+        self.config = config or OpenCLIPNetworkConfig()
+        self.device = torch.device(device)
+        import open_clip
 
-class SigLIPNetwork(nn.Module):
-    def __init__(self, config: SigLIPNetworkConfig):
-        super().__init__()
-        self.config = config
-        self.model = AutoModel.from_pretrained(
-            self.config.clip_model_pretrained, torch_dtype=torch.float16,
-        ).to("cuda")
-        self.model.eval()
-        self.processor = AutoProcessor.from_pretrained(self.config.clip_model_pretrained)
-        self.clip_n_dims = self.config.clip_n_dims
-        self.tokenizer = AutoTokenizer.from_pretrained(f"google/siglip2-base-patch16-512")
+        model, _, _ = open_clip.create_model_and_transforms(
+            self.config.model_name,
+            pretrained=self.config.pretrained,
+            device=self.device,
+        )
+        self.model = model.eval()
+        self.tokenizer = open_clip.get_tokenizer(self.config.model_name)
+        if self.device.type == "cuda":
+            self.model = self.model.half()
 
-        self.positives = self.config.positives
-        self.negatives = self.config.negatives
-
-    @property
-    def name(self) -> str:
-        return "siglip_{}".format(self.config.clip_model_pretrained)
-
-    @property
-    def embedding_dim(self) -> int:
-        return self.config.clip_n_dims
-
-    def encode_image(self, input):
-        # Use the processor to preprocess the image.
-        inputs = self.processor(images=[input], return_tensors="pt").to("cuda")
-        return self.model.get_image_features(**inputs)
-    
-    def encode_text(self, text):
-        """
-        Encode text using SigLIP2.
-        This method tokenizes the input text, feeds it into the model to obtain text features,
-        and then normalizes the features.
-        """
-        inputs = self.tokenizer(text, padding="max_length", max_length=64, return_tensors="pt").to("cuda")
-        with torch.no_grad():
-            text_features = self.model.get_text_features(**inputs)
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        return text_features
+    @torch.no_grad()
+    def encode_text(self, prompts: str | Iterable[str]) -> torch.Tensor:
+        if isinstance(prompts, str):
+            prompts = [prompts]
+        tokens = self.tokenizer(list(prompts)).to(self.device)
+        features = self.model.encode_text(tokens)
+        return F.normalize(features.float(), dim=-1, eps=1e-6)
 
 
-if __name__ == "__main__":
-    import numpy as np
-    from PIL import Image
+class SigLIPNetwork:
+    """SigLIP/SigLIP2 text encoder using Hugging Face Transformers.
 
-    # Test OpenCLIP text feature extraction
-    print("Testing OpenCLIP text feature extraction...")
-    openclip_config = OpenCLIPNetworkConfig()
-    openclip_net = OpenCLIPNetwork(openclip_config)
-    sample_text = "This is a sample text for OpenCLIP."
-    openclip_text_feature = openclip_net.encode_text(sample_text)
-    print("OpenCLIP text feature shape:", openclip_text_feature.shape)
+    ``from_pretrained`` downloads the model/processor automatically on first use
+    and then reuses the local Hugging Face cache on later runs.
+    """
 
-    # Test SigLIP text feature extraction
-    print("\nTesting SigLIP text feature extraction...")
-    siglip_config = SigLIPNetworkConfig()
-    siglip_net = SigLIPNetwork(siglip_config)
-    sample_text_s = "This is a sample text for SigLIP2."
-    siglip_text_feature = siglip_net.encode_text(sample_text_s)
-    print("SigLIP text feature shape:", siglip_text_feature.shape)
+    def __init__(self, config: SigLIPNetworkConfig | None = None, device: str = "cuda") -> None:
+        self.config = config or SigLIPNetworkConfig()
+        self.device = torch.device(device)
+
+        from transformers import AutoModel, AutoProcessor, AutoTokenizer
+
+        model_id = self.config.model_name
+        cache_dir = str(self.config.cache_dir) if self.config.cache_dir is not None else None
+        common_kwargs = {
+            "cache_dir": cache_dir,
+            "local_files_only": bool(self.config.local_files_only),
+            "trust_remote_code": bool(self.config.trust_remote_code),
+        }
+        common_kwargs = {k: v for k, v in common_kwargs.items() if v is not None}
+
+        print(f"[language] Loading SigLIP2 text encoder: {model_id}")
+        if not self.config.local_files_only:
+            print("[language] Transformers will download/cache the SigLIP2 weights automatically if needed.")
+
+        try:
+            self.processor = AutoProcessor.from_pretrained(model_id, **common_kwargs)
+            self._processor_accepts_text_keyword = True
+        except Exception as exc:
+            print(f"[language] AutoProcessor failed ({exc}); falling back to AutoTokenizer.")
+            self.processor = AutoTokenizer.from_pretrained(model_id, **common_kwargs)
+            self._processor_accepts_text_keyword = False
+
+        dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        model_kwargs = dict(common_kwargs)
+        # ``torch_dtype`` works on Transformers 4.x. If a future version only
+        # accepts ``dtype``, the fallback below handles that.
+        model_kwargs["torch_dtype"] = dtype
+        if self.config.attn_implementation:
+            model_kwargs["attn_implementation"] = self.config.attn_implementation
+
+        try:
+            self.model = AutoModel.from_pretrained(model_id, **model_kwargs)
+        except TypeError:
+            model_kwargs.pop("attn_implementation", None)
+            try:
+                self.model = AutoModel.from_pretrained(model_id, **model_kwargs)
+            except TypeError:
+                model_kwargs.pop("torch_dtype", None)
+                model_kwargs["dtype"] = dtype
+                self.model = AutoModel.from_pretrained(model_id, **model_kwargs)
+
+        self.model = self.model.to(self.device).eval()
+        print(f"[language] SigLIP2 ready on {self.device}.")
+
+    @torch.no_grad()
+    def encode_text(self, prompts: str | Iterable[str]) -> torch.Tensor:
+        if isinstance(prompts, str):
+            prompts = [prompts]
+        texts = [str(x) for x in prompts]
+
+        # SigLIP2 training used lowercased text and max_length=64. The official
+        # processor handles the normal preprocessing; the explicit arguments make
+        # behavior stable across Transformers versions.
+        if self._processor_accepts_text_keyword:
+            inputs = self.processor(
+                text=texts,
+                padding="max_length",
+                truncation=True,
+                max_length=int(self.config.max_length),
+                return_tensors="pt",
+            )
+        else:
+            inputs = self.processor(
+                texts,
+                padding="max_length",
+                truncation=True,
+                max_length=int(self.config.max_length),
+                return_tensors="pt",
+            )
+
+        if hasattr(inputs, "to"):
+            inputs = inputs.to(self.device)
+        else:
+            inputs = {key: value.to(self.device) for key, value in inputs.items()}
+
+        if hasattr(self.model, "get_text_features"):
+            features = self.model.get_text_features(**inputs)
+        else:
+            output = self.model.text_model(**inputs)
+            features = getattr(output, "pooler_output", output.last_hidden_state[:, 0])
+            if hasattr(self.model, "text_projection"):
+                features = self.model.text_projection(features)
+        return F.normalize(features.float(), dim=-1, eps=1e-6)
+
+
+def get_text_feature(network: OpenCLIPNetwork | SigLIPNetwork, text: str) -> torch.Tensor:
+    return network.encode_text(text)

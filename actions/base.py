@@ -1,44 +1,42 @@
-from core.splat import SplatData
+"""Basic viewer controls."""
+
+from __future__ import annotations
+
+from typing import Any
+
 
 class BasicFeature:
-    def __init__(self, viewer, splatdata:SplatData):
-        self.selected_indices = None
-        self.server = viewer.server
+    """RGB/depth/normal/snapshot controls."""
+
+    def __init__(self, viewer: Any, splatdata: Any) -> None:
         self.viewer = viewer
         self.splatdata = splatdata
-        self.idx = 0
-        with self.server.gui.add_folder(label="Basic"):
-            self._rgb = self.server.gui.add_button('RGB')
-            self._depth = self.server.gui.add_button('Depth')
-            self._normal = self.server.gui.add_button('Normal From Depth')
-            self._snapshot = self.server.gui.add_button('Snapshot')
-            
-            self._rgb.on_click(self.get_rgb)
-            self._depth.on_click(self.get_depth)
-            self._normal.on_click(self.get_normal)
-            self._snapshot.on_click(self.snapshot)
-      
-    def get_rgb(self, _):
-        # self._feature_map = False
-        self._normal_map = False
-        self._hard_class = False
-        self.mode = "rgb"
-        self.viewer.update_splat_renderer(splats=self.splatdata, render_mode=self.mode)
-        
-    def get_depth(self, _):
-        self._feature_map = False
-        self._hard_class = False
-        self.mode = "depth"
-        self.viewer.update_splat_renderer(splats=self.splatdata, render_mode=self.mode)
+        try:
+            gui = viewer.server.gui
+            with gui.add_folder("Basic"):
+                rgb_button = gui.add_button("RGB")
+                depth_button = gui.add_button("Depth")
+                normal_button = gui.add_button("Normal")
+                snapshot_button = gui.add_button("Snapshot")
 
-    def get_normal(self, _):
-        self._feature_map = False
-        self._hard_class = False
-        self.mode = "normal"
-        self.viewer.update_splat_renderer(splats=self.splatdata, render_mode=self.mode)
-    
-    def snapshot(self, _):
-        
-        self.idx = self.viewer.snapshot(self.idx)
-        
-        
+            @rgb_button.on_click
+            def _rgb(_: Any) -> None:
+                viewer.update_splat_renderer(splatdata, render_mode="rgb")
+
+            @depth_button.on_click
+            def _depth(_: Any) -> None:
+                viewer.update_splat_renderer(splatdata, render_mode="depth")
+
+            @normal_button.on_click
+            def _normal(_: Any) -> None:
+                data = splatdata.get_data()
+                old = data["colors"]
+                data["colors"] = ((data["normals"] + 1.0) * 0.5).clamp(0.0, 1.0)
+                viewer.update_splat_renderer(data, render_mode="rgb")
+                data["colors"] = old
+
+            @snapshot_button.on_click
+            def _snapshot(_: Any) -> None:
+                viewer._snapshot_index = viewer.snapshot(viewer._snapshot_index)
+        except Exception as exc:
+            print(f"[basic] GUI setup warning: {exc}")

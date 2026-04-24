@@ -1,0 +1,2 @@
+# CPU-safe default. For CUDA 12.4 use requirements-cuda124.txt instead.
+-r requirements-cpu.txt

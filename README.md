@@ -1,176 +1,499 @@
 # Mini Viewer
-> Realtime Gaussian splat inspector with SigLIP/CLIP querying, bounding-box overlays, and a streamlined `viser` / `nerfview` workflow.
+
+Realtime Gaussian splat viewer for `.ply` and NumPy splat folders, with CUDA/CPU rendering, SigLIP2/CLIP language-feature querying, queried-feature bounding boxes, and Nerfstudio-style camera-path export/video rendering.
+
+Mini Viewer is designed for large 3DGS scenes where the normal path is CUDA + `gsplat`, but the same environment can still run a CPU/torch fallback for debugging, servers without a visible GPU, or rerender fallback when CUDA rasterization fails.
 
 ![Mini Viewer](docs/mini_viewer.png)
 
-Mini Viewer taps GSplat’s CUDA kernels through Nerfview’s ergonomics and renders them with Viser’s low-latency WebGL front-end. Load `.ply` scenes, NumPy blobs, or ckpt exports, drop in language features, and layer annotated bounding boxes via the in-repo `viser_bbox` toolkit.
+## What is included
 
-## Highlights
-- **Fresh viewer stack** – `viser 1.0.15`, `nerfview 0.1.3`, and `gsplat 1.5.3` with PyTorch CUDA 12.4 wheels.
-- **Language guidance** – SigLIP/CLIP embeddings recolor or prune splats in real time.
-- **One-click shaders** – RGB, depth, normals, screenshots with white background cleanup, and sticky camera poses.
-- **Bounding boxes** – Use SpatialLM-style scripts to draw labeled walls, doors, windows, and instance boxes right inside the same Viser server.
-- **Batteries included** – `viser_bbox` ships as an editable package inside this repo for custom scripts or tooling.
+- Load Gaussian splats from `.ply` or NumPy folders.
+- Load language features from `.npy`, `.npz`, `.pt`, or `.pth`.
+- Query language features with SigLIP2 by default: `google/siglip2-so400m-patch16-512`.
+- Visualize feature maps, RGB, depth, and normals.
+- Toggle queried-feature bounding boxes and export them as JSON.
+- Add camera keyframes in the viewer and export a Nerfstudio-style `camera_path.json`.
+- Render camera-path videos from the GUI or with a headless script.
+- Use CUDA/`gsplat` when available, with optional CPU rerender fallback.
 
-## Environment Setup
-Tested on **Python 3.11**, **CUDA 12.4**, and NVIDIA 30/40/A-series data center GPUs. FlashAttention requires CUDA ≥ 12.3 if you enable it.
+## Repository dependency files
+
+The repo should keep only these project-level dependency/config files:
+
+```text
+README.md
+requirements.txt
+env.yml
+pyproject.toml
+```
+
+Older split files such as `requirements-cpu.txt`, `requirements-cuda124.txt`, `requirements-language.txt`, and `environment-mini-viewer-*.yml` are intentionally replaced by the single full-stack environment below.
+
+## Environment setup
+
+Use Python 3.10. The full environment installs a CUDA 12.4 PyTorch build, `gsplat`, the viewer stack, and language-query dependencies. It can still run CPU rendering via `--device cpu --backend torch`.
+
+From the repo root:
 
 ```bash
-# create env (micromamba shown, conda/venv also fine)
-micromamba create -n viewer python=3.11 -y
-micromamba activate viewer
+conda env remove -n mini-viewer -y || true
+conda env create -f env.yml
+conda activate mini-viewer
 
-# install the viewer stack
+# The bbox helper is an editable local package in this repo.
+pip install -e ./viser_bbox
+```
+
+Verify the install:
+
+```bash
+python - <<'PY'
+import torch
+print('torch:', torch.__version__)
+print('torch cuda build:', torch.version.cuda)
+print('cuda available:', torch.cuda.is_available())
+
+try:
+    import gsplat
+    print('gsplat: OK')
+except Exception as exc:
+    print('gsplat import failed:', repr(exc))
+
+try:
+    import transformers
+    import open_clip
+    print('language deps: OK')
+except Exception as exc:
+    print('language deps failed:', repr(exc))
+PY
+```
+
+### Optional pip-only install
+
+`requirements.txt` contains the same full-stack pip dependency set used by `env.yml`. Use it only when you are not creating the Conda environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 pip install -e ./viser_bbox
-
-# optional extras
-pip install flash-attn --no-build-isolation
 ```
 
-Useful CUDA exports (adapt to your toolchain):
+## Quick start
+
+### CUDA + gsplat, normal path
 
 ```bash
-export CC=/usr/bin/gcc-11.5
-export CXX=/usr/bin/g++-11.5
-export LD=/usr/bin/g++-11.5
-export TORCH_CUDA_ARCH_LIST="8.6;8.9"
-export CUDA_HOME=/usr/local/cuda-12.4
-export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
-export PATH=/usr/local/cuda-12.4/bin:$PATH
-export CPLUS_INCLUDE_PATH=/usr/local/cuda-12.4/include
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --language-feature /path/to/features.npy \
+  --device cuda \
+  --backend gsplat \
+  --port 8080
 ```
 
-## Quick Start
-1. Prepare a Gaussian splat `.ply`, a set of NumPy arrays (`coord.npy`, `quat.npy`, `scale.npy`, `opacity.npy`, `color.npy`), or a ckpt convertible via `utils/pyl_to_ckpt.py`.
-2. (Optional) Pre-compute language features (SigLIP or CLIP embeddings) into a `.pth` or `.npy`.
-3. Launch the viewer:
+Open:
+
+```text
+http://localhost:8080
+```
+
+### PLY input
 
 ```bash
 python run_viewer.py \
   --ply /path/to/scene.ply \
-  --language_feature /path/to/langfeat.pth \
-  --feature_type siglip \
-  --port 8080 \
-  --device cuda
+  --device cuda \
+  --backend gsplat
 ```
 
-Then open `http://localhost:8080` to interact with the scene. The server persists camera states inside `.tmp/camera_state.json`, so refreshing keeps your view.
-
-### Example: ScanNet++ scene
-This repository includes ScanNet++ samples under `data/scannetpp/val`. To inspect `09c1414f1b`, run:
+### CPU rendering from the same environment
 
 ```bash
 python run_viewer.py \
-  --folder_npy data/scannetpp/val/09c1414f1b \
-  --language_feature language_feature_dummy \
+  --folder-npy /path/to/scene_folder \
+  --device cpu \
+  --backend torch
+```
+
+### Force CPU rerender fallback while still loading CUDA/language features
+
+Useful when `gsplat` fails during interaction, or while debugging feature maps on a large scene:
+
+```bash
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --language-feature /path/to/features.npy \
   --device cuda \
+  --backend gsplat \
+  --force-cpu-render \
+  --cpu-fallback-splats 80000
+```
+
+## Data formats
+
+### NumPy folder
+
+Pass the folder through `--folder-npy`. The loader expects:
+
+```text
+coord.npy      # required, N x 3 xyz
+quat.npy       # required, N x 4 quaternion
+scale.npy      # required, N x 3 scale
+opacity.npy    # required, N or N x 1 opacity
+color.npy      # required, N x 3 RGB, usually 0-255 or 0-1
+normal.npy     # optional, N x 3 normals
+```
+
+If your NumPy scale values are log-scales, add:
+
+```bash
+--npy-scale-log
+```
+
+### PLY
+
+Pass an Inria/3DGS-style `.ply` through `--ply`. The loader handles standard Gaussian PLY properties such as positions, opacity, scales, rotations, and color/SH fields.
+
+### Language features
+
+Language features should be aligned with the splats and have shape approximately:
+
+```text
+N x D
+```
+
+Supported formats:
+
+```text
+.npy
+.npz
+.pt
+.pth
+```
+
+Run with:
+
+```bash
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --language-feature /path/to/language_features.pth \
+  --feature-type siglip2 \
+  --device cuda
+```
+
+If you already have a precomputed text/query embedding, use it directly and avoid loading a text encoder:
+
+```bash
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --language-feature /path/to/point_features.npy \
+  --query-feature /path/to/query_vector.npy \
+  --device cpu \
+  --backend torch
+```
+
+## SigLIP2 query encoder
+
+The default text-query model is:
+
+```text
+google/siglip2-so400m-patch16-512
+```
+
+The viewer downloads it lazily on first text query. To pre-download the model once:
+
+```bash
+python scripts/download_siglip2.py \
+  --cache-dir /path/to/hf_cache
+```
+
+Then run with:
+
+```bash
+python run_viewer.py \
+  --folder-npy /path/to/scene_folder \
+  --language-feature /path/to/features.npy \
+  --hf-cache-dir /path/to/hf_cache \
+  --device cuda
+```
+
+CPU text encoding is disabled by default because it is slow. To explicitly allow it:
+
+```bash
+--enable-language-on-cpu
+```
+
+## Viewer controls
+
+The GUI exposes folders for basic rendering, language features, and camera paths.
+
+### Basic rendering
+
+- RGB rendering.
+- Depth rendering.
+- Normal rendering.
+- Snapshot export.
+- CPU fallback toggles for rerender failures.
+- Force CPU renderer toggle.
+- CPU fallback splat-count control.
+
+### Language feature querying
+
+- Show feature map.
+- Query by text using SigLIP2/CLIP.
+- Query by precomputed embedding.
+- Set score/rate threshold.
+- Recolor matched splats.
+- Toggle queried-feature bbox.
+- Export queried-feature bbox JSON.
+
+A missing language feature file produces:
+
+```text
+[language] No language feature tensor loaded; query controls are disabled.
+```
+
+That only means `--language-feature` is missing or points to the wrong file.
+
+### Queried-feature bbox
+
+Workflow:
+
+1. Start the viewer with `--language-feature`.
+2. Enter a text query or load `--query-feature`.
+3. Adjust the threshold/rate.
+4. Toggle **Show query bbox**.
+5. Press **Export query bbox**.
+
+Default output:
+
+```text
+outputs/query_bbox.json
+```
+
+## Camera path and video rendering
+
+### In the viewer
+
+1. Move the camera to a desired pose.
+2. Press **Add Camera**.
+3. Repeat for more keyframes.
+4. Press **Export Cameras**.
+5. Press **Render Video**.
+
+Default outputs:
+
+```text
+outputs/camera_path.json
+outputs/render.mp4
+```
+
+### Headless render
+
+```bash
+python scripts/render_camera_path.py \
+  --folder-npy /path/to/scene_folder \
+  --camera-path outputs/camera_path.json \
+  --output outputs/render.mp4 \
+  --device cuda \
+  --backend gsplat
+```
+
+CPU fallback video render:
+
+```bash
+python scripts/render_camera_path.py \
+  --folder-npy /path/to/scene_folder \
+  --camera-path outputs/camera_path.json \
+  --output outputs/render_cpu.mp4 \
+  --device cpu \
+  --backend torch
+```
+
+## Useful CLI arguments
+
+```text
+--ply PATH                         Load a .ply scene.
+--folder-npy PATH                  Load a NumPy splat folder.
+--language-feature PATH            Load aligned language features.
+--query-feature PATH               Load a precomputed query embedding.
+--feature-type {siglip2,siglip,clip}
+--siglip-model MODEL_ID            Default: google/siglip2-so400m-patch16-512.
+--hf-cache-dir PATH                Hugging Face model cache directory.
+--enable-language-on-cpu           Allow text encoder on CPU.
+--bbox-script PATH                 Draw SpatialLM-style bbox script through viser_bbox.
+--device {auto,cuda,cpu}           Default: auto.
+--backend {auto,gsplat,torch}      Default: auto.
+--max-splats N                     Optional global splat downsample while loading.
+--max-cpu-splats N                 CPU renderer splat cap. Default: 180000.
+--cpu-render-fallback              Retry failed CUDA rerenders on CPU. Enabled by default.
+--no-cpu-render-fallback           Disable automatic CPU retry.
+--cpu-fallback-splats N            CPU retry cap. Default: 80000.
+--force-cpu-render                 Force all viewer rerenders through CPU torch renderer.
+--npy-scale-log                    Treat NumPy scale arrays as log-scales.
+--camera-path PATH                 Camera-path JSON path. Default: outputs/camera_path.json.
+--video-output PATH                GUI video output path. Default: outputs/render.mp4.
+--render-width N                   GUI video width. Default: 1280.
+--render-height N                  GUI video height. Default: 720.
+--render-fps N                     GUI video FPS. Default: 30.
+--render-seconds SEC              GUI video duration. Default: 5.0.
+--port PORT                        Viser port. Default: 8080.
+```
+
+Both hyphen and underscore aliases are accepted for the patched options, for example `--folder-npy` and `--folder_npy`.
+
+## ScanNet++ style example
+
+```bash
+python run_viewer.py \
+  --folder-npy /work/runyi_yang/Worldcept/example/scannetpp_v2_mcmc_3dgs_lang_large/val/09c1414f1b \
+  --language-feature /path/to/features.npy \
+  --hf-cache-dir /work/runyi_yang/hf_cache \
+  --device cuda \
+  --backend gsplat \
+  --cpu-render-fallback \
+  --cpu-fallback-splats 80000 \
   --port 8080
 ```
 
-### CLI Arguments
-- `--ply`: Path to Inria-style Gaussian PLY (alternatively use `--folder_npy` to read NumPy blobs).
-- `--folder_npy`: Directory with `{coord,normal?,quat,scale,opacity,color}.npy`.
-- `--language_feature`: Torch or NumPy file containing `(N, D)` embeddings aligned with the splats.
-- `--feature_type`: `siglip`, `clip`, or path to a saved embedding vector.
-- `--prune`: Optional string flag to enable pruning heuristics baked into `SplatData`.
-- `--bbox_script`: SpatialLM-style script (see `docs/bboxes/demo.txt`) for drawing bounding boxes via `viser_bbox`.
-- `--device`: `cuda` or `cpu`.
-- `--port`: Viser server port (default `8080`).
-
-## Bounding Boxes with `viser_bbox`
-The `viser_bbox` subpackage ships reusable helpers and an API for drawing labeled wireframe boxes. Install it once (`pip install -e ./viser_bbox`) and pass a script to the viewer:
+If interaction is unstable on this very large scene, force CPU rerendering:
 
 ```bash
 python run_viewer.py \
-  --folder_npy data/scannetpp/val/09c1414f1b \
-  --bbox_script docs/bboxes/demo.txt \
-  --device cuda
+  --folder-npy /work/runyi_yang/Worldcept/example/scannetpp_v2_mcmc_3dgs_lang_large/val/09c1414f1b \
+  --language-feature /path/to/features.npy \
+  --device cuda \
+  --backend gsplat \
+  --force-cpu-render \
+  --cpu-fallback-splats 80000
 ```
 
-Scripts follow the SpatialLM format:
+## Troubleshooting
 
+### `No language feature tensor loaded`
+
+Pass a valid feature file:
+
+```bash
+--language-feature /path/to/features.npy
 ```
-wall0 = Wall(-2, -2, 0, 2, -2, 0, 3.0, 0.18)
-door0 = Door(wall0, 0.0, -2.0, 1.0, 0.9, 2.1)
-bbox0 = Bbox(Sofa, 0.8, 0.3, 0.7, 0.0, 1.5, 0.9, 1.0)
+
+To find candidates:
+
+```bash
+find /path/to/scene_folder \
+  -maxdepth 2 \
+  \( -name '*.npy' -o -name '*.npz' -o -name '*.pth' -o -name '*.pt' \) \
+  | sort
 ```
 
-Under the hood we call `viser_bbox.add_script_bboxes`, so you can generate or reload scripts at runtime. For programmatic overlays (e.g., after an object selection) import `add_bounding_box` directly inside any action.
+### `gsplat` render error or CUDA fallback message
 
-## Language-Driven Editing
-Inside the **Language Feature** folder in the GUI you can:
-- Visualize the embedding space by sending colors straight to the renderer (`Feature Map`).
-- Toggle per-point normals (`Normal Map`) for quick sanity checks.
-- Type free-form text prompts (SigLIP/CLIP encoders are loaded dynamically) and recolor matches in red.
-- Prune splats by cosine score using the `Rate` field and `Prune based on text prompt` button.
+Keep automatic fallback enabled:
 
-The module keeps both the PCA-compressed 3-channel preview (`language_feature`) and the full high-dimensional tensor (`language_feature_large`) so you can swap render modes without recomputing embeddings.
+```bash
+--cpu-render-fallback --cpu-fallback-splats 80000
+```
 
-### Query Gallery
-Below are snapshots generated from live language queries. The embeddings come from SigLIP and are executed through the viewer’s cosine-similarity filter.
+Or force CPU rendering:
 
-![Query: vocation art](docs/query/query_vocation_art.png)
-![Query: toy add flavor](docs/query/query_toy_addflavor.png)
+```bash
+--force-cpu-render
+```
 
-See `docs/query/text_query.mp4` for a short screen recording of the workflow.
+### CPU-only machine
 
-## Working with Data
-- **PLY ingestion:** `utils/pyl_to_ckpt.py` converts Inria-format splats into GSplat-ready tensors. We expect vertex properties named `x,y,z`, `scale_*`, `rot_*`, `f_dc_*`, and `opacity`.
-- **NumPy ingestion:** drop `coord.npy`, `quat.npy`, `scale.npy`, `opacity.npy`, and `color.npy` (0–255) into a folder and pass it via `--folder_npy`. Optional `normal.npy` and language feature files are respected.
-- **Language features:** store embeddings as `.pth` (tuple `(tensor, metadata)`) or `.npy`. The loader masks them alongside the splats so pruning stays consistent.
-- **Snapshots:** press *Snapshot* in the GUI to write `./snapshot{idx}.png` with alpha handled automatically and the current camera stored under `.tmp/`.
+Use the same environment if it installs successfully, then run:
 
-## Development Notes
-- GUI controls live in `actions/*.py`. Drop another folder via `server.gui.add_folder` to extend the toolkit (object selection, path planning, etc.).
-- `ViewerEditor` subclasses `nerfview.Viewer`, so any upstream camera improvements land here automatically when you bump the pip dependency.
-- `update_splat_renderer` can swap backends (e.g., `backend="torch"`) if you experiment with new renderers.
-- Do **not** stream datasets across nodes; latency tanks because GSplat expects local NVMe speed.
+```bash
+python run_viewer.py --ply /path/to/scene.ply --device cpu --backend torch
+```
 
-## Roadmap
-- [x] Object query & removal
-- [x] Basic `viser_bbox` overlay support from the CLI
-- [ ] Object selection tooling
-- [ ] Camera placement and keyframe interpolation
-- [ ] In-viewer bbox authoring + editing tools
+If the `gsplat` wheel is unavailable on a CPU-only platform, remove or comment this line from `requirements.txt` and `env.yml`:
+
+```text
+gsplat==1.5.3+pt24cu124
+```
+
+Then recreate the env and use `--device cpu --backend torch`.
+
+### Hugging Face download/cache issues
+
+Set an explicit cache directory:
+
+```bash
+export HF_HOME=/path/to/hf_cache
+python scripts/download_siglip2.py --cache-dir /path/to/hf_cache
+```
+
+Then pass:
+
+```bash
+--hf-cache-dir /path/to/hf_cache
+```
+
+## Development
+
+- Main entry point: `run_viewer.py`.
+- Splat loading and CPU master copy: `core/splat.py`.
+- CUDA/torch/CPU-fallback rendering: `core/renderer.py`.
+- Viser/Nerfview integration: `core/viewer.py`.
+- Basic controls: `actions/base.py`.
+- Language query and bbox controls: `actions/language_feature.py`.
+- Camera-path controls: `actions/camera_path.py`.
+- SigLIP2/CLIP text embedding: `models/clip_query.py`.
+- Headless camera-path rendering: `scripts/render_camera_path.py`.
+- SigLIP2 pre-download helper: `scripts/download_siglip2.py`.
+
+Run a syntax check:
+
+```bash
+python -m compileall run_viewer.py actions core models scripts utils
+```
 
 ## Acknowledgements
-- [Nerfview](https://github.com/hangg7/nerfview) for the original interactive scaffolding.
-- [Viser](https://github.com/nerfstudio-project/viser) for the lightweight WebGL frontend.
-- [GSplat](https://github.com/nerfstudio-project/gsplat) for CUDA splat rendering.
-- `viser_bbox` utilities were authored in this repo to streamline bounding-box overlays.
+
+- Nerfview for interactive viewer scaffolding.
+- Viser for the WebGL frontend.
+- GSplat for CUDA Gaussian rasterization.
+- The in-repo `viser_bbox` utilities for bounding-box overlays.
+
 ## Citations
+
 If you use Mini Viewer in research, please consider citing:
 
-```
+```bibtex
 @article{wu2023mars,
   author    = {Wu, Zirui and Liu, Tianyu and Luo, Liyi and Zhong, Zhide and Chen, Jianteng and Xiao, Hongmin and Hou, Chao and Lou, Haozhe and Chen, Yuantao and Yang, Runyi and Huang, Yuxin and Ye, Xiaoyu and Yan, Zike and Shi, Yongliang and Liao, Yiyi and Zhao, Hao},
   title     = {MARS: An Instance-aware, Modular and Realistic Simulator for Autonomous Driving},
   journal   = {CICAI},
-  year      = {2023},
+  year      = {2023}
 }
 
 @misc{yang2024spectrally,
-      title={Spectrally Pruned Gaussian Fields with Neural Compensation}, 
-      author={Runyi Yang and Zhenxin Zhu and Zhou Jiang and Baijun Ye and Xiaoxue Chen and Yifei Zhang and Yuantao Chen and Jian Zhao and Hao Zhao},
-      year={2024},
-      eprint={2405.00676},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
+  title         = {Spectrally Pruned Gaussian Fields with Neural Compensation},
+  author        = {Runyi Yang and Zhenxin Zhu and Zhou Jiang and Baijun Ye and Xiaoxue Chen and Yifei Zhang and Yuantao Chen and Jian Zhao and Hao Zhao},
+  year          = {2024},
+  eprint        = {2405.00676},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV}
 }
 
 @article{zheng2024gaussiangrasper,
-  title={Gaussiangrasper: 3d language gaussian splatting for open-vocabulary robotic grasping},
-  author={Zheng, Yuhang and Chen, Xiangyu and Zheng, Yupeng and Gu, Songen and Yang, Runyi and Jin, Bu and Li, Pengfei and Zhong, Chengliang and Wang, Zengmao and Liu, Lina and others},
-  journal={IEEE Robotics and Automation Letters},
-  year={2024},
-  publisher={IEEE}
+  title     = {Gaussiangrasper: 3d language gaussian splatting for open-vocabulary robotic grasping},
+  author    = {Zheng, Yuhang and Chen, Xiangyu and Zheng, Yupeng and Gu, Songen and Yang, Runyi and Jin, Bu and Li, Pengfei and Zhong, Chengliang and Wang, Zengmao and Liu, Lina and others},
+  journal   = {IEEE Robotics and Automation Letters},
+  year      = {2024},
+  publisher = {IEEE}
 }
 
 @article{li2025scenesplat,
-  title={SceneSplat: Gaussian Splatting-based Scene Understanding with Vision-Language Pretraining},
-  author={Li, Yue and Ma, Qi and Yang, Runyi and Li, Huapeng and Ma, Mengjiao and Ren, Bin and Popovic, Nikola and Sebe, Nicu and Konukoglu, Ender and Gevers, Theo and others},
-  journal={arXiv preprint arXiv:2503.18052},
-  year={2025}
+  title   = {SceneSplat: Gaussian Splatting-based Scene Understanding with Vision-Language Pretraining},
+  author  = {Li, Yue and Ma, Qi and Yang, Runyi and Li, Huapeng and Ma, Mengjiao and Ren, Bin and Popovic, Nikola and Sebe, Nicu and Konukoglu, Ender and Gevers, Theo and others},
+  journal = {arXiv preprint arXiv:2503.18052},
+  year    = {2025}
 }
 ```

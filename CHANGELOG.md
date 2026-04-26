@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 - 2026-04-24
+
+### Added
+
+- Headless camera-pose rendering for `rgb`, `depth`, `normal`, `feature`, `query-score`, and `query-mask` layers.
+- `--camera-state` support for rendering one PNG from `.tmp/camera_state.json`.
+- Feature-map and query-score video rendering from exported `outputs/camera_path.json`.
+- Optional `--frame-output-dir` PNG sequence export and `--score-output` per-splat query-score export.
+
+### Changed
+
+- `scripts/render_camera_path.py` now renders feature maps by replacing per-splat RGB with aligned feature preview/query-score colors before projection.
+
 ## 0.3.0 - 2026-04-24
 
 ### Added

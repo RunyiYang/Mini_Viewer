@@ -347,6 +347,83 @@ python scripts/render_camera_path.py \
   --backend torch
 ```
 
+### Render feature maps from saved camera poses
+
+The headless renderer can use the same exported camera pose/path to render feature-space outputs instead of RGB. The projection is defined by the camera JSON; the rendered colors are selected by `--render-layer`.
+
+Supported layers:
+
+```text
+rgb          Original splat RGB.
+depth        Expected-depth visualization from the same pose.
+normal       Per-splat normal colors.
+feature      PCA/preview colors from the aligned feature tensor.
+query-score  Heatmap of cosine score against a text/image/vector query.
+query-mask   Binary threshold mask from the same score.
+```
+
+Render one PNG from the current camera saved by **Save current camera**:
+
+```bash
+python scripts/render_camera_path.py \
+  --folder-npy /path/to/scene_folder \
+  --feature-file /path/to/features.npy \
+  --render-layer feature \
+  --camera-state .tmp/camera_state.json \
+  --output outputs/feature_map.png \
+  --device cuda \
+  --backend gsplat
+```
+
+Render a feature-map video from an exported camera path:
+
+```bash
+python scripts/render_camera_path.py \
+  --folder-npy /path/to/scene_folder \
+  --feature-file /path/to/features.npy \
+  --render-layer feature \
+  --camera-path outputs/camera_path.json \
+  --output outputs/feature_map.mp4 \
+  --device cuda \
+  --backend gsplat
+```
+
+Render a SigLIP2 text-query score map from the camera path:
+
+```bash
+python scripts/render_camera_path.py \
+  --folder-npy /path/to/scene_folder \
+  --feature-file /path/to/siglip2_features.npy \
+  --feature-type siglip2 \
+  --query-text "chair" \
+  --render-layer query-score \
+  --camera-path outputs/camera_path.json \
+  --output outputs/chair_score.mp4 \
+  --score-output outputs/chair_scores.npy \
+  --device cuda
+```
+
+Render a DINOv2 image-query mask from a camera pose:
+
+```bash
+python scripts/render_camera_path.py \
+  --folder-npy /path/to/scene_folder \
+  --dino-feature /path/to/dino_features.npy \
+  --feature-type dinov2 \
+  --query-image /path/to/query_crop.png \
+  --render-layer query-mask \
+  --threshold 0.55 \
+  --camera-state .tmp/camera_state.json \
+  --output outputs/dino_query_mask.png \
+  --device cuda
+```
+
+For exact frame-by-frame inspection, add:
+
+```bash
+--frame-output-dir outputs/feature_frames
+```
+
 ## Static bbox scripts with `viser_bbox`
 
 Install once:
@@ -395,6 +472,11 @@ bbox0 = Bbox(Sofa, 0.8, 0.3, 0.7, 0.0, 1.5, 0.9, 1.0)
 --max-cpu-splats INT               CPU renderer downsample cap.
 --enable-feature-model-on-cpu      Allow SigLIP/CLIP/DINO encoders on CPU.
 --camera-path PATH                 Camera-path JSON output/input path.
+--camera-state PATH                Headless render from one saved camera pose.
+--render-layer LAYER               Headless layer: rgb/depth/normal/feature/query-score/query-mask.
+--query-text TEXT                  Headless SigLIP/CLIP text query for score maps.
+--score-output PATH                Save normalized per-splat query scores as .npy.
+--frame-output-dir PATH            Also save rendered frames as PNGs.
 --video-output PATH                GUI video output path.
 --render-width INT
 --render-height INT

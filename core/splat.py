@@ -9,6 +9,7 @@ Supported scene inputs:
 from __future__ import annotations
 
 import math
+import random
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -24,6 +25,12 @@ except Exception:  # pragma: no cover - optional until PLY loading is used.
 from utils.color_shs import SH2RGB
 
 SKIP_FEATURE_NAMES = {"", "none", "null", "language_feature_dummy", "dummy"}
+_EPS = 1e-9
+_CHUNK_SIZE = 256
+_SH_C0 = 0.28209479177387814
+_UINT11_MASK = (1 << 11) - 1
+_UINT10_MASK = (1 << 10) - 1
+_UINT8_MASK = (1 << 8) - 1
 
 
 SCENE_ARRAY_ALIASES: dict[str, tuple[str, ...]] = {
@@ -112,7 +119,10 @@ def load_feature_array(path: str | Path) -> np.ndarray:
             return _extract_tensor_from_loaded(obj[obj.files[0]])
         raise ValueError(f"Empty npz file: {path}")
     if suffix in {".pt", ".pth"}:
-        obj = torch.load(path, map_location="cpu")
+        try:
+            obj = torch.load(path, map_location="cpu", weights_only=True)
+        except TypeError:
+            obj = torch.load(path, map_location="cpu")
         return _extract_tensor_from_loaded(obj)
     raise ValueError(f"Unsupported feature extension '{path.suffix}' for {path}")
 
@@ -131,6 +141,28 @@ def resolve_feature_path(scene_path: Path | None, language_feature: Path | None)
         if candidate.exists():
             return candidate
     raise FileNotFoundError(f"Feature file not found: {language_feature}")
+
+
+def _resolve_index_sidecar(feature_path: Path) -> Path | None:
+    candidate = feature_path.with_name(f"{feature_path.stem}_index.npy")
+    return candidate if candidate.exists() else None
+
+
+def _load_index_sidecar(feature_path: Path) -> np.ndarray | None:
+    index_path = _resolve_index_sidecar(feature_path)
+    if index_path is None:
+        return None
+    index = np.load(index_path)
+    if index.ndim != 1:
+        raise ValueError(f"Expected 1D feature index sidecar, got shape {index.shape} from {index_path}.")
+    if not np.issubdtype(index.dtype, np.integer):
+        raise TypeError(f"Expected integer feature indices in {index_path}, got {index.dtype}.")
+    index = index.astype(np.int64, copy=False)
+    if index.size == 0:
+        raise ValueError(f"Feature index sidecar is empty: {index_path}.")
+    if np.unique(index).size != index.size:
+        raise ValueError(f"Feature index sidecar contains duplicate source rows: {index_path}.")
+    return index
 
 
 def _find_array_file(folder: Path, names: Iterable[str]) -> Path | None:
@@ -192,27 +224,118 @@ def _normalize_colors(colors: torch.Tensor) -> torch.Tensor:
     return colors.clamp(0.0, 1.0)
 
 
-def _feature_preview(features: torch.Tensor) -> torch.Tensor:
-    """Create a 3-channel preview from arbitrary-dimensional language features."""
-    features_cpu = features.detach().float().cpu()
-    if features_cpu.ndim == 1:
-        features_cpu = features_cpu[:, None]
-    if features_cpu.shape[-1] == 3:
-        preview = features_cpu
-    else:
-        try:
-            from sklearn.decomposition import PCA
+def _set_pca_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-            sample = features_cpu.numpy()
-            preview = torch.from_numpy(PCA(n_components=3, random_state=0).fit_transform(sample)).float()
-        except Exception:
-            if features_cpu.shape[-1] >= 3:
-                preview = features_cpu[:, :3]
-            else:
-                preview = F.pad(features_cpu, (0, 3 - features_cpu.shape[-1]))
-    minv = preview.amin(dim=0, keepdim=True)
-    maxv = preview.amax(dim=0, keepdim=True)
-    return ((preview - minv) / (maxv - minv + 1e-6)).clamp(0.0, 1.0)
+
+def _resolve_pca_device(requested: str, active_device: torch.device) -> torch.device:
+    requested = str(requested or "auto").strip().lower()
+    if requested == "auto":
+        if active_device.type == "cuda" and torch.cuda.is_available():
+            return active_device
+        return torch.device("cpu")
+    if requested == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("--pca-device cuda was requested, but torch.cuda.is_available() is false.")
+    if requested not in {"cpu", "cuda"}:
+        raise ValueError(f"Unsupported PCA device '{requested}'. Use auto, cpu, or cuda.")
+    return torch.device(requested)
+
+
+def _pca_normalize_torch(values: torch.Tensor, brightness: float) -> torch.Tensor:
+    min_val = values.amin(dim=0, keepdim=True)
+    max_val = values.amax(dim=0, keepdim=True)
+    color = (values - min_val) / torch.clamp(max_val - min_val, min=1e-6)
+    return (color * float(brightness)).clamp_(0.0, 1.0)
+
+
+def _feature_preview_torch(
+    features: torch.Tensor,
+    *,
+    device: torch.device,
+    brightness: float,
+    seed: int,
+) -> torch.Tensor:
+    _set_pca_seed(seed)
+    q = min(6, features.shape[0], features.shape[1])
+    if q < 3:
+        raise ValueError(f"Need at least 3 PCA components, got q={q} for shape={tuple(features.shape)}")
+    feat = features.detach().float().to(device)
+    with torch.no_grad():
+        _, _, v = torch.pca_lowrank(feat, center=True, q=q, niter=5)
+        projection = feat @ v
+        if projection.shape[1] >= 6:
+            preview = projection[:, :3] * 0.7 + projection[:, 3:6] * 0.3
+        else:
+            preview = projection[:, :3]
+        return _pca_normalize_torch(preview, brightness).cpu()
+
+
+def _feature_preview_sklearn(
+    features: torch.Tensor,
+    *,
+    brightness: float,
+    seed: int,
+    batch_size: int = 500_000,
+) -> torch.Tensor:
+    from sklearn.decomposition import IncrementalPCA, PCA
+    from sklearn.preprocessing import StandardScaler
+
+    _set_pca_seed(seed)
+    feat = features.detach().float().cpu().numpy()
+    scaler = StandardScaler()
+    feat_scaled = scaler.fit_transform(feat)
+    if feat_scaled.shape[0] > 100_000:
+        pca = IncrementalPCA(n_components=3, batch_size=batch_size)
+        pca.fit(feat_scaled)
+        preview = pca.transform(feat_scaled).astype(np.float32)
+    else:
+        pca = PCA(n_components=3, random_state=seed)
+        preview = pca.fit_transform(feat_scaled).astype(np.float32)
+    preview_t = torch.from_numpy(preview).float()
+    return _pca_normalize_torch(preview_t, brightness).cpu()
+
+
+def _feature_preview(
+    features: torch.Tensor,
+    *,
+    method: str,
+    pca_device: torch.device,
+    brightness: float,
+    seed: int,
+) -> torch.Tensor:
+    """Create a 3-channel preview using Chorus-style PCA colorization."""
+    features = features.detach().float()
+    if features.ndim == 1:
+        features = features[:, None]
+    if features.shape[0] == 0:
+        return torch.empty((0, 3), dtype=torch.float32)
+    method = str(method or "torch").strip().lower()
+    if method == "torch":
+        try:
+            preview = _feature_preview_torch(
+                features,
+                device=pca_device,
+                brightness=brightness,
+                seed=seed,
+            )
+            print(f"[feature] PCA preview: method=torch, device={pca_device}, seed={seed}.")
+            return preview
+        except Exception as exc:
+            if pca_device.type == "cuda":
+                torch.cuda.empty_cache()
+            raise RuntimeError(
+                f"Torch PCA preview failed on {pca_device}: {exc}. "
+                "Retry with --pca-method sklearn or --pca-device cpu."
+            ) from exc
+    if method == "sklearn":
+        preview = _feature_preview_sklearn(features, brightness=brightness, seed=seed)
+        print(f"[feature] PCA preview: method=sklearn, device=cpu, seed={seed}.")
+        return preview
+    raise ValueError(f"Unsupported PCA method '{method}'. Use torch or sklearn.")
 
 
 def _structured_columns(vertex: Any, names: list[str]) -> np.ndarray:
@@ -221,6 +344,153 @@ def _structured_columns(vertex: Any, names: list[str]) -> np.ndarray:
 
 def _has_props(vertex: Any, names: list[str]) -> bool:
     return all(name in vertex.data.dtype.names for name in names)
+
+
+def _normalize_quat_np(quat: np.ndarray) -> np.ndarray:
+    quat = quat.astype(np.float32, copy=False)
+    quat = quat / (np.linalg.norm(quat, axis=1, keepdims=True) + _EPS)
+    sign = np.sign(quat[:, 0])
+    sign[sign == 0] = 1
+    return quat * sign[:, None]
+
+
+def _read_compressed_gaussian_ply(ply: Any) -> dict[str, torch.Tensor]:
+    chunk = ply["chunk"].data
+    vertex = ply["vertex"].data
+    num = vertex.shape[0]
+
+    chunk_indices = np.arange(num, dtype=np.int64) // _CHUNK_SIZE
+    chunk_indices = np.minimum(chunk_indices, len(chunk) - 1)
+
+    min_x = chunk["min_x"][chunk_indices]
+    min_y = chunk["min_y"][chunk_indices]
+    min_z = chunk["min_z"][chunk_indices]
+    max_x = chunk["max_x"][chunk_indices]
+    max_y = chunk["max_y"][chunk_indices]
+    max_z = chunk["max_z"][chunk_indices]
+
+    min_scale_x = chunk["min_scale_x"][chunk_indices]
+    min_scale_y = chunk["min_scale_y"][chunk_indices]
+    min_scale_z = chunk["min_scale_z"][chunk_indices]
+    max_scale_x = chunk["max_scale_x"][chunk_indices]
+    max_scale_y = chunk["max_scale_y"][chunk_indices]
+    max_scale_z = chunk["max_scale_z"][chunk_indices]
+
+    min_r = chunk["min_r"][chunk_indices]
+    min_g = chunk["min_g"][chunk_indices]
+    min_b = chunk["min_b"][chunk_indices]
+    max_r = chunk["max_r"][chunk_indices]
+    max_g = chunk["max_g"][chunk_indices]
+    max_b = chunk["max_b"][chunk_indices]
+
+    packed_position = vertex["packed_position"].astype(np.uint32)
+    packed_scale = vertex["packed_scale"].astype(np.uint32)
+    packed_rotation = vertex["packed_rotation"].astype(np.uint32)
+    packed_color = vertex["packed_color"].astype(np.uint32)
+
+    px = ((packed_position >> 21) & _UINT11_MASK).astype(np.float32) / _UINT11_MASK
+    py = ((packed_position >> 11) & _UINT10_MASK).astype(np.float32) / _UINT10_MASK
+    pz = (packed_position & _UINT11_MASK).astype(np.float32) / _UINT11_MASK
+
+    coord = np.empty((num, 3), dtype=np.float32)
+    coord[:, 0] = min_x * (1.0 - px) + max_x * px
+    coord[:, 1] = min_y * (1.0 - py) + max_y * py
+    coord[:, 2] = min_z * (1.0 - pz) + max_z * pz
+
+    sx = ((packed_scale >> 21) & _UINT11_MASK).astype(np.float32) / _UINT11_MASK
+    sy = ((packed_scale >> 11) & _UINT10_MASK).astype(np.float32) / _UINT10_MASK
+    sz = (packed_scale & _UINT11_MASK).astype(np.float32) / _UINT11_MASK
+
+    scale_log = np.empty((num, 3), dtype=np.float32)
+    scale_log[:, 0] = min_scale_x * (1.0 - sx) + max_scale_x * sx
+    scale_log[:, 1] = min_scale_y * (1.0 - sy) + max_scale_y * sy
+    scale_log[:, 2] = min_scale_z * (1.0 - sz) + max_scale_z * sz
+    scale = np.exp(scale_log)
+
+    norm = np.float32(1.0 / (np.sqrt(2.0) * 0.5))
+    a = ((packed_rotation >> 20) & _UINT10_MASK).astype(np.float32) / _UINT10_MASK
+    b = ((packed_rotation >> 10) & _UINT10_MASK).astype(np.float32) / _UINT10_MASK
+    c = (packed_rotation & _UINT10_MASK).astype(np.float32) / _UINT10_MASK
+    a = (a - 0.5) * norm
+    b = (b - 0.5) * norm
+    c = (c - 0.5) * norm
+    m = np.sqrt(np.maximum(0.0, 1.0 - (a * a + b * b + c * c)))
+    which = packed_rotation >> 30
+
+    quat = np.empty((num, 4), dtype=np.float32)
+    mask = which == 0
+    quat[mask, 0] = m[mask]
+    quat[mask, 1] = a[mask]
+    quat[mask, 2] = b[mask]
+    quat[mask, 3] = c[mask]
+    mask = which == 1
+    quat[mask, 0] = a[mask]
+    quat[mask, 1] = m[mask]
+    quat[mask, 2] = b[mask]
+    quat[mask, 3] = c[mask]
+    mask = which == 2
+    quat[mask, 0] = a[mask]
+    quat[mask, 1] = b[mask]
+    quat[mask, 2] = m[mask]
+    quat[mask, 3] = c[mask]
+    mask = which == 3
+    quat[mask, 0] = a[mask]
+    quat[mask, 1] = b[mask]
+    quat[mask, 2] = c[mask]
+    quat[mask, 3] = m[mask]
+    quat = _normalize_quat_np(quat)
+
+    cr = ((packed_color >> 24) & _UINT8_MASK).astype(np.float32) / _UINT8_MASK
+    cg = ((packed_color >> 16) & _UINT8_MASK).astype(np.float32) / _UINT8_MASK
+    cb = ((packed_color >> 8) & _UINT8_MASK).astype(np.float32) / _UINT8_MASK
+    cw = (packed_color & _UINT8_MASK).astype(np.float32) / _UINT8_MASK
+
+    r = min_r * (1.0 - cr) + max_r * cr
+    g = min_g * (1.0 - cg) + max_g * cg
+    b_val = min_b * (1.0 - cb) + max_b * cb
+    fdc = np.stack(
+        [(r - 0.5) / _SH_C0, (g - 0.5) / _SH_C0, (b_val - 0.5) / _SH_C0],
+        axis=-1,
+    )
+    colors = np.clip(fdc * _SH_C0 + 0.5, 0.0, 1.0).astype(np.float32)
+    opacities = np.clip(cw, 0.0, 1.0).astype(np.float32)
+
+    return {
+        "means": torch.from_numpy(coord).float(),
+        "normals": torch.zeros((num, 3), dtype=torch.float32),
+        "quats": _normalize_quats(torch.from_numpy(quat).float()),
+        "scales": torch.from_numpy(scale).float().clamp_min(1e-8),
+        "opacities": torch.from_numpy(opacities).float(),
+        "colors": _normalize_colors(torch.from_numpy(colors).float()),
+    }
+
+
+def _align_features_by_source_index(
+    *,
+    raw: np.ndarray,
+    feature_index: np.ndarray,
+    final_ids: np.ndarray,
+    feature_path: Path,
+) -> np.ndarray:
+    if raw.shape[0] != feature_index.shape[0]:
+        raise ValueError(
+            f"Feature rows ({raw.shape[0]}) do not match sidecar rows "
+            f"({feature_index.shape[0]}) for {feature_path}."
+        )
+
+    order = np.argsort(feature_index)
+    sorted_index = feature_index[order]
+    positions = np.searchsorted(sorted_index, final_ids)
+    in_bounds = positions < sorted_index.shape[0]
+    matched = np.zeros(final_ids.shape[0], dtype=bool)
+    matched[in_bounds] = sorted_index[positions[in_bounds]] == final_ids[in_bounds]
+    if not np.all(matched):
+        missing = final_ids[~matched][:10].tolist()
+        raise ValueError(
+            f"Feature index sidecar for {feature_path} does not cover all loaded splats. "
+            f"First missing source rows: {missing}"
+        )
+    return raw[order[positions]]
 
 
 class SplatData:
@@ -234,6 +504,8 @@ class SplatData:
         self._data_cpu: dict[str, torch.Tensor] = {}
         self._language_feature_large: torch.Tensor | None = None
         self._language_feature_large_cpu: torch.Tensor | None = None
+        self._feature_path: Path | None = None
+        self._feature_index: np.ndarray | None = None
         self._original_count = 0
         self._final_original_indices: np.ndarray | None = None
         self._load()
@@ -252,7 +524,26 @@ class SplatData:
         self._original_count = int(len(original_indices))
         original_n_before_masks = int(tensors["means"].shape[0])
 
-        valid_mask = self._load_valid_feature_mask()
+        self._feature_path = resolve_feature_path(
+            Path(self.scene_path) if self.scene_path else None,
+            getattr(self.args, "language_feature", None),
+        )
+        if self._feature_path is not None:
+            self._feature_index = _load_index_sidecar(self._feature_path)
+
+        valid_mask = None
+        if self._feature_index is not None:
+            feature_index = self._feature_index
+            if np.any(feature_index < 0) or np.any(feature_index >= original_n_before_masks):
+                raise ValueError(
+                    f"Feature index sidecar for {self._feature_path} contains source rows outside "
+                    f"[0, {original_n_before_masks})."
+                )
+            tensors = {k: v[feature_index] for k, v in tensors.items()}
+            original_indices = original_indices[feature_index]
+            print(f"[feature] Applied feature index sidecar with {feature_index.shape[0]:,} splats.")
+        else:
+            valid_mask = self._load_valid_feature_mask()
         if valid_mask is not None:
             if len(valid_mask) != original_n_before_masks:
                 print(
@@ -294,6 +585,11 @@ class SplatData:
         vertex = ply["vertex"]
         names = set(vertex.data.dtype.names)
         n = len(vertex)
+
+        if "packed_position" in names and "chunk" in {element.name for element in ply.elements}:
+            tensors = _read_compressed_gaussian_ply(ply)
+            print(f"[splat] Loaded compressed PLY {path} ({n:,} splats).")
+            return tensors, np.arange(n, dtype=np.int64)
 
         required = ["x", "y", "z"]
         if not all(name in names for name in required):
@@ -399,8 +695,7 @@ class SplatData:
         return tensors, np.arange(n, dtype=np.int64)
 
     def _load_aligned_features(self, original_n_before_masks: int, valid_mask: np.ndarray | None) -> None:
-        scene_path = getattr(self.args, "folder_npy", None) or getattr(self.args, "ply", None)
-        feature_path = resolve_feature_path(Path(scene_path) if scene_path else None, getattr(self.args, "language_feature", None))
+        feature_path = self._feature_path
         if feature_path is None:
             empty_cpu = torch.empty((len(self), 0), dtype=torch.float32)
             self._data_cpu["language_feature"] = empty_cpu
@@ -417,7 +712,14 @@ class SplatData:
         final_ids = self._final_original_indices
         assert final_ids is not None
         features: np.ndarray | None = None
-        if raw.shape[0] == original_n_before_masks:
+        if self._feature_index is not None:
+            features = _align_features_by_source_index(
+                raw=raw,
+                feature_index=self._feature_index,
+                final_ids=final_ids,
+                feature_path=feature_path,
+            )
+        elif raw.shape[0] == original_n_before_masks:
             features = raw[final_ids]
         elif valid_mask is not None and raw.shape[0] == int(valid_mask.sum()):
             valid_ids = np.nonzero(valid_mask)[0]
@@ -438,10 +740,17 @@ class SplatData:
             self._data["language_feature"] = empty_cpu.to(self.device)
             return
 
-        full = torch.from_numpy(features).float()
-        # Normalize for stable cosine queries but keep the preview independent.
-        full = F.normalize(full, dim=-1, eps=1e-6)
-        preview_cpu = _feature_preview(full).cpu().contiguous()
+        raw_full = torch.from_numpy(features).float()
+        pca_device = _resolve_pca_device(getattr(self.args, "pca_device", "auto"), self.device)
+        preview_cpu = _feature_preview(
+            raw_full,
+            method=getattr(self.args, "pca_method", "torch"),
+            pca_device=pca_device,
+            brightness=float(getattr(self.args, "pca_brightness", 1.25)),
+            seed=int(getattr(self.args, "pca_seed", 42)),
+        ).cpu().contiguous()
+        # Normalize for stable cosine queries but keep the PCA preview independent.
+        full = F.normalize(raw_full, dim=-1, eps=1e-6)
         self._language_feature_large_cpu = full.cpu().contiguous()
         self._language_feature_large = self._language_feature_large_cpu.to(self.device)
         self._data_cpu["language_feature"] = preview_cpu

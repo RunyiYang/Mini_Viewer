@@ -157,6 +157,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bbox-script", "--bbox_script", dest="bbox_script", type=Path, default=None)
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--backend", default="auto", choices=["auto", "gsplat", "torch"])
+    parser.add_argument("--pca-device", "--pca_device", dest="pca_device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--pca-method", "--pca_method", dest="pca_method", default="torch", choices=["torch", "sklearn"])
+    parser.add_argument("--pca-brightness", "--pca_brightness", dest="pca_brightness", type=float, default=1.25)
+    parser.add_argument("--pca-seed", "--pca_seed", dest="pca_seed", type=int, default=42)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--sh-degree", "--sh_degree", dest="sh_degree", type=int, default=3)
@@ -293,11 +297,15 @@ def main() -> None:
     CameraPathFeature(viewer, splatdata, args)
 
     try:
-        server.scene.add_grid("/grid", width=10.0, height=10.0, cell_size=0.5)
+        server.scene.world_axes.visible = False
     except Exception:
         pass
     try:
-        server.scene.add_frame("/world", axes_length=0.5, axes_radius=0.02)
+        server.scene.add_grid("/grid", width=10.0, height=10.0, cell_size=0.5, visible=False)
+    except Exception:
+        pass
+    try:
+        server.scene.add_frame("/world", show_axes=False, axes_length=0.5, axes_radius=0.02, visible=False)
     except Exception:
         pass
 

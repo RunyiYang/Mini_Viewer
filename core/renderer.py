@@ -19,6 +19,11 @@ from typing import Any, Literal, Sequence
 import numpy as np
 import torch
 
+try:
+    from nerfview._renderer import InterruptRenderException as _NerfviewInterruptRenderException
+except Exception:  # pragma: no cover - optional import outside viewer runtime.
+    _NerfviewInterruptRenderException = None  # type: ignore[assignment]
+
 RenderBackend = Literal["auto", "gsplat", "torch"]
 
 _FALLBACK_MESSAGES_SEEN: set[str] = set()
@@ -31,6 +36,38 @@ def _log_once(key: str, message: str, *, enabled: bool = True) -> None:
         return
     _FALLBACK_MESSAGES_SEEN.add(key)
     print(message)
+
+
+def _clip_message(message: str, max_chars: int = 360) -> str:
+    message = " ".join(message.strip().split())
+    if len(message) <= max_chars:
+        return message
+    return f"{message[: max_chars - 3]}..."
+
+
+def _summarize_exception(exc: Exception) -> str:
+    lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
+    if not lines:
+        return exc.__class__.__name__
+
+    markers = (
+        "fatal error:",
+        "No CUDA toolkit found",
+        "Error building extension",
+        "RuntimeError:",
+        "ImportError:",
+        "AttributeError:",
+        "error:",
+    )
+    for marker in markers:
+        for line in lines:
+            if marker in line:
+                return _clip_message(line)
+    return _clip_message(lines[0])
+
+
+def _is_render_interrupt(exc: Exception) -> bool:
+    return _NerfviewInterruptRenderException is not None and isinstance(exc, _NerfviewInterruptRenderException)
 
 
 def _normalize_device(device: str | torch.device) -> str:
@@ -345,7 +382,9 @@ def _try_gsplat_rasterization(
                 return depth[..., None].repeat(1, 1, 3)
         return image[..., :3].clamp(0.0, 1.0)
     except Exception as first_error:
-        raise RuntimeError(f"gsplat rasterization failed: {first_error}") from first_error
+        if _is_render_interrupt(first_error):
+            raise
+        raise RuntimeError(f"gsplat rasterization failed: {_summarize_exception(first_error)}") from first_error
 
 
 def viewer_render_fn(
@@ -410,12 +449,14 @@ def viewer_render_fn(
             )
             return image_to_uint8_numpy(image)
         except Exception as exc:
+            if _is_render_interrupt(exc):
+                raise
             if fallback_to_cpu:
                 fallback_splats = cpu_fallback_splats if cpu_fallback_splats is not None else max_cpu_splats
                 _log_once(
                     "gsplat_to_cpu",
                     "[renderer] gsplat failed; rerendering with CPU fallback "
-                    f"({fallback_splats:,} splats max): {exc}",
+                    f"({fallback_splats:,} splats max): {_summarize_exception(exc)}",
                     enabled=log_fallbacks,
                 )
                 image = _torch_point_splat_rasterization(
@@ -433,7 +474,8 @@ def viewer_render_fn(
 
             _log_once(
                 "gsplat_to_same_device_torch",
-                f"[renderer] gsplat failed; CPU fallback disabled, using torch renderer on {render_device}: {exc}",
+                "[renderer] gsplat failed; CPU fallback disabled, using torch renderer "
+                f"on {render_device}: {_summarize_exception(exc)}",
                 enabled=log_fallbacks,
             )
 

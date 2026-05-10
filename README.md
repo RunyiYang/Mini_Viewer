@@ -168,6 +168,8 @@ siglip_features, dino_features, dinov2_features, image_features, visual_features
 
 The first dimension must match the loaded splat count, the original splat count before masks/downsampling, or the `valid_feat_mask.npy` count.
 
+If the feature file has a sibling `*_index.npy` sidecar, Mini Viewer treats it as source-row alignment metadata.
+
 ## Run the viewer
 
 ### PLY scene, automatic backend
